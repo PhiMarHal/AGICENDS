@@ -53,25 +53,26 @@
     <div id="status">connecting...</div>
 
     <script>
-        // ========================================================================
-        // Constants — must match server.
-        // ========================================================================
         const CANVAS_WIDTH = 720;
         const CANVAS_HEIGHT = 1080;
         const WALL_THICKNESS = 35;
+        // Side-wall segments rendered slightly smaller than WALL_THICKNESS so the
+        // rounded block texture creates a visible gap between stacked tiles.
+        const SIDE_WALL_DISPLAY_SIZE = WALL_THICKNESS * 0.9;
         const BLOCK_RENDER_SIZE = 90;
         const COIN_SIZE = 45;
         const PLAYER_BASE_SCALE = 1.2;
         const WORLD_HEIGHT_UP = 200000;
 
-        // Physics constants — MUST match server's SIM exactly. If these drift, the
-        // client's prediction diverges from the server and every snapshot will
-        // produce a visible correction.
         const SIM = {
             GRAVITY: 1600,
             JUMP_FORCE: 650,
             HORIZONTAL_SPEED: 400,
             MAX_FALL_SPEED: 800,
+            // Hard velocity caps — match server.
+            MAX_VX: 800,
+            MAX_VY_UP: 2400,
+            MAX_VY_DOWN: 2400,
             WALL_THICKNESS: 35,
             FLAP_COOLDOWN_MS: 200,
             START_Y_OFFSET: 200,
@@ -79,13 +80,14 @@
             PLAYER_BOUNCE: 2.0,
         };
 
-        // How aggressively to pull the predicted state toward the server's snapshot.
-        // Per-frame lerp factor. Higher = snappier corrections, more visible jitter
-        // on disagreement. Lower = smoother but the player can feel rubber-bandy.
+        function clampVelocity(s) {
+            if (s.vx > SIM.MAX_VX) s.vx = SIM.MAX_VX;
+            if (s.vx < -SIM.MAX_VX) s.vx = -SIM.MAX_VX;
+            if (s.vy > SIM.MAX_VY_DOWN) s.vy = SIM.MAX_VY_DOWN;
+            if (s.vy < -SIM.MAX_VY_UP) s.vy = -SIM.MAX_VY_UP;
+        }
+
         const RECONCILE_LERP = 0.15;
-        // Velocity lerp is gentler — velocity disagreements are less visually jarring
-        // than position disagreements, and aggressive velocity correction interferes
-        // with the predicted physics integration.
         const RECONCILE_VEL_LERP = 0.08;
 
         const COLORS = {
@@ -98,9 +100,6 @@
         const statusEl = document.getElementById('status');
         function setStatus(t) { statusEl.textContent = t; }
 
-        // ========================================================================
-        // WebSocket layer.
-        // ========================================================================
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = wsProtocol + '//' + window.location.host;
 
@@ -117,7 +116,6 @@
             ws.addEventListener('message', (event) => {
                 let msg;
                 try { msg = JSON.parse(event.data); } catch { return; }
-
                 if (msg.type === 'welcome') {
                     mySessionId = msg.sessionId;
                     setStatus('you are ' + mySessionId);
@@ -134,40 +132,21 @@
         }
 
         function sendFlap() {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'flap' }));
-            }
+            if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'flap' }));
         }
 
-        // ========================================================================
-        // Phaser scene
-        // ========================================================================
         class GameScene extends Phaser.Scene {
             constructor() {
                 super({ key: 'GameScene' });
-
                 this.playerVisuals = new Map();
                 this.blockSprites = new Map();
                 this.coinSprites = new Map();
                 this.sideWallSprites = [];
-
                 this.cameraTarget = null;
                 this.previousAlive = new Map();
-
                 this.gameOverOverlayShown = false;
-                this.spaceKeyDown = false;
-
-                // Client-side prediction state for MY player.
-                // null until I receive my first snapshot containing my own data.
-                // Once initialized, this is the authoritative source for my sprite's position.
                 this.myState = null;
-
-                // The latest server snapshot's data for me (target for reconciliation).
                 this.myServerTarget = null;
-
-                // True for the frame following a flap input — we need to apply the
-                // flap to myState in update() so it lines up with the physics step.
-                this.flapPending = false;
             }
 
             create() {
@@ -175,8 +154,7 @@
 
                 this.cameras.main.setBackgroundColor(COLORS.background);
                 this.cameras.main.setBounds(
-                    0, -WORLD_HEIGHT_UP,
-                    CANVAS_WIDTH, CANVAS_HEIGHT + WORLD_HEIGHT_UP
+                    0, -WORLD_HEIGHT_UP, CANVAS_WIDTH, CANVAS_HEIGHT + WORLD_HEIGHT_UP
                 );
 
                 const bgScale = CANVAS_WIDTH / 1024;
@@ -202,18 +180,13 @@
                 }
 
                 this.scoreText = this.add.text(CANVAS_WIDTH / 2, 50, '0', {
-                    fontFamily: 'Arial',
-                    fontSize: '56px',
-                    fontStyle: 'bold',
-                    color: COLORS.primary,
-                    stroke: '#ffffff',
-                    strokeThickness: 6
+                    fontFamily: 'Arial', fontSize: '56px', fontStyle: 'bold',
+                    color: COLORS.primary, stroke: '#ffffff', strokeThickness: 6
                 }).setOrigin(0.5).setScrollFactor(0).setDepth(100);
 
                 this.tutorialText = this.add.text(
-                    CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 100, 'TAP TO FLAP', {
-                    fontFamily: 'Arial', fontSize: '32px', color: COLORS.primary
-                }
+                    CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 100, 'TAP TO FLAP',
+                    { fontFamily: 'Arial', fontSize: '32px', color: COLORS.primary }
                 ).setOrigin(0.5).setDepth(20).setScrollFactor(0);
 
                 this.spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
@@ -227,9 +200,6 @@
                 connect();
             }
 
-            // --------------------------------------------------------------------
-            // Textures (unchanged)
-            // --------------------------------------------------------------------
             generateTextures() {
                 const cPrimary = Phaser.Display.Color.HexStringToColor(COLORS.primary).color;
 
@@ -284,14 +254,11 @@
                 const canvas = document.createElement('canvas');
                 canvas.width = W; canvas.height = H;
                 const ctx = canvas.getContext('2d');
-
-                ctx.fillStyle = '#ffffff';
-                ctx.fillRect(0, 0, W, H);
+                ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
                 ctx.fillStyle = opts.fill;
                 ctx.fillRect(center - opts.centerBandW / 2, 0, opts.centerBandW, H);
                 ctx.fillRect(center - opts.towerDist - opts.towerW, 0, opts.towerW, H);
                 ctx.fillRect(center + opts.towerDist, 0, opts.towerW, H);
-
                 for (let y = opts.archStart; y < H; y += (opts.archH + opts.archGap)) {
                     const bridgeBottom = y + opts.bridgeHeight;
                     const leftStart = center - opts.towerDist;
@@ -303,7 +270,6 @@
                     ctx.lineTo(leftEnd, bridgeBottom);
                     ctx.quadraticCurveTo(leftStart + leftWidth / 2, bridgeBottom - opts.curveR, leftStart, bridgeBottom);
                     ctx.closePath(); ctx.fill();
-
                     const rightStart = center + opts.centerBandW / 2;
                     const rightEnd = center + opts.towerDist;
                     const rightWidth = rightEnd - rightStart;
@@ -314,21 +280,15 @@
                     ctx.quadraticCurveTo(rightStart + rightWidth / 2, bridgeBottom - opts.curveR, rightStart, bridgeBottom);
                     ctx.closePath(); ctx.fill();
                 }
-
                 const imgData = ctx.getImageData(0, 0, W, H);
                 const data = imgData.data;
                 for (let i = 0; i < data.length; i += 4) {
-                    if (data[i] === 255 && data[i + 1] === 255 && data[i + 2] === 255) {
-                        data[i + 3] = 0;
-                    }
+                    if (data[i] === 255 && data[i + 1] === 255 && data[i + 2] === 255) data[i + 3] = 0;
                 }
                 ctx.putImageData(imgData, 0, 0);
                 this.textures.addCanvas(key, canvas);
             }
 
-            // --------------------------------------------------------------------
-            // Player visuals
-            // --------------------------------------------------------------------
             createPlayerVisual(sessionId, isMe) {
                 const sprite = this.add.image(CANVAS_WIDTH / 2, CANVAS_HEIGHT - 200, 'player');
                 sprite.setScale(PLAYER_BASE_SCALE);
@@ -355,10 +315,8 @@
                 return {
                     sprite, eyesContainer,
                     eyeLeft, eyeRight, pupilLeft, pupilRight,
-                    currentEye: { x: 0, y: 0 },
-                    targetEye: { x: 0, y: 0 },
-                    currentPupil: { x: 0, y: 0 },
-                    targetPupil: { x: 0, y: 0 },
+                    currentEye: { x: 0, y: 0 }, targetEye: { x: 0, y: 0 },
+                    currentPupil: { x: 0, y: 0 }, targetPupil: { x: 0, y: 0 },
                     lastVx: 0,
                 };
             }
@@ -368,9 +326,6 @@
                 v.eyesContainer.destroy();
             }
 
-            // --------------------------------------------------------------------
-            // World init
-            // --------------------------------------------------------------------
             applyWorldInit(msg) {
                 for (const b of msg.blocks) this.spawnBlockSprite(b);
                 for (const c of msg.coins) this.spawnCoinSprite(c);
@@ -378,32 +333,27 @@
             }
 
             spawnBlockSprite(b) {
-                const sprite = this.add.image(b.x, b.y, 'block');
-                sprite.setDepth(2);
+                const sprite = this.add.image(b.x, b.y, 'block').setDepth(2);
                 if (b.scale && b.scale !== 1) sprite.setScale(b.scale);
                 this.blockSprites.set(b.id, sprite);
             }
 
             spawnCoinSprite(c) {
                 const sprite = this.add.image(c.x, c.y, 'coin');
-                sprite.setDisplaySize(COIN_SIZE, COIN_SIZE);
-                sprite.setDepth(3);
+                sprite.setDisplaySize(COIN_SIZE, COIN_SIZE).setDepth(3);
                 this.coinSprites.set(c.id, sprite);
                 this.tweens.add({ targets: sprite, angle: 360, duration: 1200, repeat: -1 });
             }
 
             spawnSideWallSegment(seg) {
                 const wt = WALL_THICKNESS;
-                const left = this.add.image(wt / 2, seg.y, 'block').setDisplaySize(wt, wt).setDepth(2);
-                const right = this.add.image(CANVAS_WIDTH - wt / 2, seg.y, 'block').setDisplaySize(wt, wt).setDepth(2);
+                const size = SIDE_WALL_DISPLAY_SIZE;
+                const left = this.add.image(wt / 2, seg.y, 'block').setDisplaySize(size, size).setDepth(2);
+                const right = this.add.image(CANVAS_WIDTH - wt / 2, seg.y, 'block').setDisplaySize(size, size).setDepth(2);
                 this.sideWallSprites.push(left, right);
             }
 
-            // --------------------------------------------------------------------
-            // Per-tick snapshot
-            // --------------------------------------------------------------------
             applySnapshot(snap) {
-                // World deltas first.
                 if (snap.newSideWallSegments) for (const seg of snap.newSideWallSegments) this.spawnSideWallSegment(seg);
                 if (snap.newBlocks) for (const b of snap.newBlocks) this.spawnBlockSprite(b);
                 if (snap.newCoins) for (const c of snap.newCoins) this.spawnCoinSprite(c);
@@ -424,13 +374,11 @@
 
                 if (snap.spikeY != null) this.spikeContainer.y = snap.spikeY;
 
-                // Players.
                 const seenIds = new Set();
                 for (const id in snap.players) {
                     seenIds.add(id);
                     const p = snap.players[id];
                     const isMe = (id === mySessionId);
-
                     let v = this.playerVisuals.get(id);
                     if (!v) {
                         v = this.createPlayerVisual(id, isMe);
@@ -442,7 +390,6 @@
                     }
 
                     if (isMe) {
-                        // Initialize my predicted state from first server data.
                         if (this.myState === null) {
                             this.myState = {
                                 x: p.x, y: p.y, vx: p.vx, vy: p.vy,
@@ -451,21 +398,13 @@
                                 nextFlapDirection: 1,
                             };
                         }
-
-                        // Save the server's authoritative target for reconciliation in update().
                         this.myServerTarget = {
                             x: p.x, y: p.y, vx: p.vx, vy: p.vy,
-                            alive: p.alive,
-                            score: p.score,
+                            alive: p.alive, score: p.score,
                             hasStarted: snap.hasStarted,
                         };
+                        if (this.myState.alive && !p.alive) this.myState.alive = false;
 
-                        // Death is decisive — snap immediately, no smooth lerp.
-                        if (this.myState.alive && !p.alive) {
-                            this.myState.alive = false;
-                        }
-
-                        // Score update.
                         if (this.scoreText) {
                             const s = (p.score || 0).toString();
                             if (this.scoreText.text !== s) {
@@ -474,7 +413,6 @@
                             }
                         }
 
-                        // Death overlay trigger.
                         const wasAlive = this.previousAlive.get(id);
                         if (wasAlive !== false && p.alive === false) {
                             v.sprite.setTint(0xff0000);
@@ -483,8 +421,6 @@
                         }
                         this.previousAlive.set(id, p.alive);
                     } else {
-                        // Other players: place sprite directly from snapshot (interpolation
-                        // comes in the next pass).
                         v.sprite.x = p.x;
                         v.sprite.y = p.y;
                         v.eyesContainer.x = p.x;
@@ -510,7 +446,6 @@
                     }
                 }
 
-                // Cleanup departed players.
                 for (const [id, v] of this.playerVisuals) {
                     if (!seenIds.has(id)) {
                         this.destroyPlayerVisual(v);
@@ -539,9 +474,6 @@
                 }
             }
 
-            // --------------------------------------------------------------------
-            // FX
-            // --------------------------------------------------------------------
             playFlapJuice(v) {
                 const stretchY = 1.6, squishX = 0.6;
                 const slant = (Math.random() - 0.5) * 30;
@@ -595,9 +527,6 @@
                 }
             }
 
-            // --------------------------------------------------------------------
-            // Game over
-            // --------------------------------------------------------------------
             showGameOver(finalScore) {
                 if (this.gameOverOverlayShown) return;
                 this.gameOverOverlayShown = true;
@@ -624,8 +553,7 @@
                 ).setOrigin(0.5).setScrollFactor(0).setDepth(201);
 
                 this._restartButton = this.add.rectangle(
-                    CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 160,
-                    280, 70, 0xffffff
+                    CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 160, 280, 70, 0xffffff
                 ).setScrollFactor(0).setDepth(201).setInteractive({ useHandCursor: true });
 
                 this._restartButtonText = this.add.text(
@@ -633,18 +561,11 @@
                     { fontFamily: 'Arial', fontSize: '32px', fontStyle: 'bold', color: '#000000' }
                 ).setOrigin(0.5).setScrollFactor(0).setDepth(202);
 
-                this._restartButton.on('pointerdown', () => {
-                    window.location.reload();
-                });
+                this._restartButton.on('pointerdown', () => window.location.reload());
             }
 
-            // --------------------------------------------------------------------
-            // Apply a flap to my predicted state (called the moment the input fires).
-            // Mirrors server's flap logic, including the cooldown.
-            // --------------------------------------------------------------------
             applyFlapToMyState() {
                 if (!this.myState || !this.myState.alive) return false;
-                // We use Date.now() for cooldown checking — same as server's elapsed-ms basis.
                 const now = performance.now();
                 if (now - this.myState.lastFlapTime < SIM.FLAP_COOLDOWN_MS) return false;
 
@@ -652,16 +573,12 @@
                 this.myState.vx = SIM.HORIZONTAL_SPEED * this.myState.nextFlapDirection;
                 this.myState.nextFlapDirection = (this.myState.nextFlapDirection === 1) ? -1 : 1;
                 this.myState.lastFlapTime = now;
+                clampVelocity(this.myState);
                 return true;
             }
 
-            // Run one physics step on my predicted state. Mirrors server's step()
-            // but only for my player and without block-collision logic (block
-            // disagreements get smoothed via reconciliation).
             stepMyState(deltaSeconds) {
                 if (!this.myState || !this.myState.alive) return;
-                // If the game hasn't started server-side yet, don't integrate. Holds the
-                // player on the start "platform" until the first flap commits.
                 if (this.myServerTarget && !this.myServerTarget.hasStarted) return;
 
                 const s = this.myState;
@@ -671,18 +588,22 @@
                 s.x += s.vx * deltaSeconds;
                 s.y += s.vy * deltaSeconds;
 
-                // Wall clamp (matches server).
                 const minX = SIM.WALL_THICKNESS + SIM.PLAYER_RADIUS;
                 const maxX = CANVAS_WIDTH - SIM.WALL_THICKNESS - SIM.PLAYER_RADIUS;
-                if (s.x < minX) { s.x = minX; s.vx = -s.vx * SIM.PLAYER_BOUNCE * 0.3; }
-                if (s.x > maxX) { s.x = maxX; s.vx = -s.vx * SIM.PLAYER_BOUNCE * 0.3; }
+                if (s.x < minX) {
+                    s.x = minX;
+                    if (s.vx < 0) s.vx = -s.vx * (1 + SIM.PLAYER_BOUNCE * 0.5);
+                }
+                if (s.x > maxX) {
+                    s.x = maxX;
+                    if (s.vx > 0) s.vx = -s.vx * (1 + SIM.PLAYER_BOUNCE * 0.5);
+                }
+                clampVelocity(s);
             }
 
-            // Reconcile predicted state toward the server's authoritative target.
             reconcileMyState() {
                 if (!this.myState || !this.myServerTarget) return;
-                if (!this.myState.alive) return; // dead = pinned where the server says
-
+                if (!this.myState.alive) return;
                 const t = this.myServerTarget;
                 this.myState.x += (t.x - this.myState.x) * RECONCILE_LERP;
                 this.myState.y += (t.y - this.myState.y) * RECONCILE_LERP;
@@ -690,9 +611,6 @@
                 this.myState.vy += (t.vy - this.myState.vy) * RECONCILE_VEL_LERP;
             }
 
-            // --------------------------------------------------------------------
-            // Per-frame update
-            // --------------------------------------------------------------------
             update(time, delta) {
                 const dt = delta / 1000;
 
@@ -701,29 +619,22 @@
                     this.bgMid.tilePositionY = this.cameras.main.scrollY * 0.3;
                 }
 
-                // Continuous flap input.
-                let flappedThisFrame = false;
                 if (!this.gameOverOverlayShown) {
                     const pointer = this.input.activePointer;
                     const isHeld = (pointer && pointer.isDown) || (this.spaceKey && this.spaceKey.isDown);
                     if (isHeld) {
-                        // Apply locally first for instant visual response.
                         const localFlap = this.applyFlapToMyState();
                         if (localFlap) {
                             const myV = this.playerVisuals.get(mySessionId);
                             if (myV) this.playFlapJuice(myV);
                         }
-                        // Tell the server every frame; server's cooldown rate-limits.
                         sendFlap();
-                        flappedThisFrame = localFlap;
                     }
                 }
 
-                // Run one physics step on my predicted state, then reconcile gently.
                 this.stepMyState(dt);
                 this.reconcileMyState();
 
-                // Apply predicted state to my sprite.
                 if (this.myState) {
                     const myV = this.playerVisuals.get(mySessionId);
                     if (myV) {
@@ -739,7 +650,6 @@
                     }
                 }
 
-                // Eye smoothing for ALL players (including me).
                 for (const v of this.playerVisuals.values()) {
                     v.currentEye.x += (v.targetEye.x - v.currentEye.x) * 0.15;
                     v.currentEye.y += (v.targetEye.y - v.currentEye.y) * 0.15;
