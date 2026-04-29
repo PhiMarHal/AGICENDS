@@ -83,8 +83,8 @@
         let ws = null;
         let mySessionId = null;
         let latestSnapshot = null;
-        let pendingWorldInit = null;     // queued until scene ready
-        let pendingSnapshots = [];       // queued snapshots until scene ready
+        let pendingWorldInit = null;
+        let pendingSnapshots = [];
         let sceneReady = false;
 
         function connect() {
@@ -124,17 +124,14 @@
             constructor() {
                 super({ key: 'GameScene' });
 
-                // Visual state, keyed by server IDs.
-                this.playerVisuals = new Map();   // sessionId -> { sprite, eyesContainer, eyeLeft, eyeRight, pupilLeft, pupilRight, currentEye:{x,y}, currentPupil:{x,y} }
-                this.blockSprites = new Map();    // blockId -> Rectangle/Image
-                this.coinSprites = new Map();     // coinId -> Image
-                this.sideWallSprites = [];        // list of sprite refs for cleanup
+                this.playerVisuals = new Map();
+                this.blockSprites = new Map();
+                this.coinSprites = new Map();
+                this.sideWallSprites = [];
 
                 this.cameraTarget = null;
-                this.lastEventIndex = 0;
-                this.previousAlive = new Map();   // for detecting transitions
+                this.previousAlive = new Map();
 
-                this.lastSpikeY = CANVAS_HEIGHT + 50;
                 this.gameOverOverlayShown = false;
             }
 
@@ -147,14 +144,14 @@
                     CANVAS_WIDTH, CANVAS_HEIGHT + WORLD_HEIGHT_UP
                 );
 
-                // Parallax backgrounds (same shape as single-player).
+                // Parallax backgrounds.
                 const bgScale = CANVAS_WIDTH / 1024;
                 this.bgFar = this.add.tileSprite(CANVAS_WIDTH / 2, 0, 1024, 2048, 'bg_far')
                     .setOrigin(0.5, 0).setScrollFactor(0).setDepth(-10).setScale(bgScale);
                 this.bgMid = this.add.tileSprite(CANVAS_WIDTH / 2, 0, 1024, 2048, 'bg_mid')
                     .setOrigin(0.5, 0).setScrollFactor(0).setDepth(-9).setScale(bgScale);
 
-                // Spike container — holds undulating triangles + a tall black base behind them.
+                // Spike container.
                 this.spikeContainer = this.add.container(0, CANVAS_HEIGHT + 50);
                 this.spikeContainer.setDepth(5);
                 const spikeBgHeight = 4000;
@@ -171,7 +168,7 @@
                     this.spikes.push(s);
                 }
 
-                // UI: score + tutorial.
+                // UI.
                 this.scoreText = this.add.text(CANVAS_WIDTH / 2, 50, '0', {
                     fontFamily: 'Arial',
                     fontSize: '56px',
@@ -187,9 +184,7 @@
                 }
                 ).setOrigin(0.5).setDepth(20).setScrollFactor(0);
 
-                // Inputs.
                 this.input.on('pointerdown', (pointer, currentlyOver) => {
-                    // If clicking the restart button, let it handle (it's interactive).
                     for (const obj of currentlyOver) {
                         if (obj === this._restartButton) return;
                     }
@@ -207,19 +202,19 @@
             }
 
             // --------------------------------------------------------------------
-            // Generated textures (player ball, blocks, coins, spike, particles, bg)
+            // Textures
             // --------------------------------------------------------------------
             generateTextures() {
                 const cPrimary = Phaser.Display.Color.HexStringToColor(COLORS.primary).color;
 
-                // Player — 60x60 black circle (rendered at scale 1.2 for ~72px).
+                // Player.
                 const pG = this.make.graphics();
                 pG.fillStyle(cPrimary);
                 pG.fillCircle(30, 30, 30);
                 pG.generateTexture('player', 60, 60);
                 pG.destroy();
 
-                // Coin — black triangle with white outline, 45x45.
+                // Coin.
                 const cG = this.make.graphics();
                 cG.fillStyle(0x000000);
                 cG.lineStyle(2, 0xffffff);
@@ -229,28 +224,28 @@
                 cG.generateTexture('coin', COIN_SIZE, COIN_SIZE);
                 cG.destroy();
 
-                // Particle — 8x8 black square.
+                // Particle.
                 const ptG = this.make.graphics();
                 ptG.fillStyle(0x000000);
                 ptG.fillRect(0, 0, 8, 8);
                 ptG.generateTexture('particle', 8, 8);
                 ptG.destroy();
 
-                // Block — 90x90 rounded black square.
+                // Block — rounded black square. Used for both obstacles AND side walls.
                 const wG = this.make.graphics();
                 wG.fillStyle(cPrimary);
                 wG.fillRoundedRect(0, 0, BLOCK_RENDER_SIZE, BLOCK_RENDER_SIZE, 24);
                 wG.generateTexture('block', BLOCK_RENDER_SIZE, BLOCK_RENDER_SIZE);
                 wG.destroy();
 
-                // Spike — 128x128 triangle.
+                // Spike.
                 const sG = this.make.graphics();
                 sG.fillStyle(Phaser.Display.Color.HexStringToColor(COLORS.hazard).color);
                 sG.fillTriangle(64, 0, 0, 128, 128, 128);
                 sG.generateTexture('spike_single', 128, 128);
                 sG.destroy();
 
-                // Parallax backgrounds (cathedral-arches pattern from single-player).
+                // Parallax backgrounds.
                 this.generateBackgroundTexture('bg_far',
                     {
                         fill: '#d0d0d0', centerBandW: 240, towerW: 120, towerDist: 360,
@@ -300,7 +295,6 @@
                     ctx.closePath(); ctx.fill();
                 }
 
-                // Make pure white pixels transparent so backgrounds layer cleanly.
                 const imgData = ctx.getImageData(0, 0, W, H);
                 const data = imgData.data;
                 for (let i = 0; i < data.length; i += 4) {
@@ -313,7 +307,7 @@
             }
 
             // --------------------------------------------------------------------
-            // Player visuals: circle sprite + eye container with slit pupils.
+            // Player visuals
             // --------------------------------------------------------------------
             createPlayerVisual(sessionId, isMe) {
                 const sprite = this.add.image(CANVAS_WIDTH / 2, CANVAS_HEIGHT - 200, 'player');
@@ -345,7 +339,6 @@
                     targetEye: { x: 0, y: 0 },
                     currentPupil: { x: 0, y: 0 },
                     targetPupil: { x: 0, y: 0 },
-                    lastFlapDir: 1,
                     lastVx: 0,
                 };
             }
@@ -356,14 +349,11 @@
             }
 
             // --------------------------------------------------------------------
-            // World-init handler: receive complete current world state.
+            // World init
             // --------------------------------------------------------------------
             applyWorldInit(msg) {
-                // Blocks.
                 for (const b of msg.blocks) this.spawnBlockSprite(b);
-                // Coins.
                 for (const c of msg.coins) this.spawnCoinSprite(c);
-                // Side wall segments.
                 for (const seg of msg.sideWallSegments) this.spawnSideWallSegment(seg);
             }
 
@@ -379,25 +369,23 @@
                 sprite.setDisplaySize(COIN_SIZE, COIN_SIZE);
                 sprite.setDepth(3);
                 this.coinSprites.set(c.id, sprite);
-                // Spinning tween.
-                this.tweens.add({
-                    targets: sprite, angle: 360, duration: 1200, repeat: -1
-                });
+                this.tweens.add({ targets: sprite, angle: 360, duration: 1200, repeat: -1 });
             }
 
+            // Side wall segment — uses the rounded `block` texture so adjacent
+            // segments visually read as stacked rounded tiles instead of one solid bar.
+            // Texture is BLOCK_RENDER_SIZE (90px) but we display it at WALL_THICKNESS (35px).
             spawnSideWallSegment(seg) {
                 const wt = WALL_THICKNESS;
-                const left = this.add.rectangle(wt / 2, seg.y, wt, wt, 0x000000);
-                const right = this.add.rectangle(CANVAS_WIDTH - wt / 2, seg.y, wt, wt, 0x000000);
-                left.setDepth(2); right.setDepth(2);
+                const left = this.add.image(wt / 2, seg.y, 'block').setDisplaySize(wt, wt).setDepth(2);
+                const right = this.add.image(CANVAS_WIDTH - wt / 2, seg.y, 'block').setDisplaySize(wt, wt).setDepth(2);
                 this.sideWallSprites.push(left, right);
             }
 
             // --------------------------------------------------------------------
-            // Per-tick snapshot.
+            // Per-tick snapshot
             // --------------------------------------------------------------------
             applySnapshot(snap) {
-                // Apply incremental world updates first.
                 if (snap.newSideWallSegments) for (const seg of snap.newSideWallSegments) this.spawnSideWallSegment(seg);
                 if (snap.newBlocks) for (const b of snap.newBlocks) this.spawnBlockSprite(b);
                 if (snap.newCoins) for (const c of snap.newCoins) this.spawnCoinSprite(c);
@@ -407,13 +395,8 @@
                 }
                 if (snap.removedCoinIds) for (const id of snap.removedCoinIds) {
                     const s = this.coinSprites.get(id);
-                    if (s) {
-                        // Note: we don't have the location here; events list provides x/y for FX
-                        s.destroy();
-                        this.coinSprites.delete(id);
-                    }
+                    if (s) { s.destroy(); this.coinSprites.delete(id); }
                 }
-                // Block scale updates (damaged blocks).
                 if (snap.blockScales) {
                     for (const id in snap.blockScales) {
                         const s = this.blockSprites.get(id);
@@ -421,12 +404,8 @@
                     }
                 }
 
-                // Spikes.
-                if (snap.spikeY != null) {
-                    this.spikeContainer.y = snap.spikeY;
-                }
+                if (snap.spikeY != null) this.spikeContainer.y = snap.spikeY;
 
-                // Players.
                 const seenIds = new Set();
                 for (const id in snap.players) {
                     seenIds.add(id);
@@ -441,26 +420,23 @@
                         }
                     }
 
-                    // Position update.
                     v.sprite.x = p.x;
                     v.sprite.y = p.y;
                     v.eyesContainer.x = p.x;
                     v.eyesContainer.y = p.y;
 
-                    // Detect flap (vx changed sign or magnitude jumped).
+                    // Detect flap event for squish-stretch FX.
                     const prevVx = v.lastVx;
                     if (Math.abs(p.vx) > 50 && Math.sign(p.vx) !== Math.sign(prevVx) && p.alive) {
-                        this.playFlapJuice(v, p.vx > 0 ? 1 : -1);
+                        this.playFlapJuice(v);
                     }
                     v.lastVx = p.vx;
 
-                    // Eye glance toward velocity (smoothed in update()).
                     v.targetEye.x = Phaser.Math.Clamp(p.vx / 20, -6, 6);
                     v.targetEye.y = Phaser.Math.Clamp(p.vy / 40, -4, 4);
                     v.targetPupil.x = v.targetEye.x * 0.5;
                     v.targetPupil.y = v.targetEye.y * 0.5;
 
-                    // Death transition.
                     const wasAlive = this.previousAlive.get(id);
                     if (wasAlive !== false && p.alive === false) {
                         v.sprite.setTint(0xff0000);
@@ -469,7 +445,6 @@
                     }
                     this.previousAlive.set(id, p.alive);
 
-                    // Update score (mine only, in the HUD).
                     if (id === mySessionId && this.scoreText) {
                         const s = (p.score || 0).toString();
                         if (this.scoreText.text !== s) {
@@ -479,7 +454,6 @@
                     }
                 }
 
-                // Remove visuals for players no longer in the snapshot.
                 for (const [id, v] of this.playerVisuals) {
                     if (!seenIds.has(id)) {
                         this.destroyPlayerVisual(v);
@@ -491,17 +465,14 @@
                     }
                 }
 
-                // Game-start transition: hide tutorial.
                 if (snap.hasStarted && this.tutorialText && this.tutorialText.active) {
                     this.tutorialText.destroy();
                 }
 
-                // Process events for FX (coin pickup shockwaves, hit particles).
                 if (snap.events) {
                     for (const ev of snap.events) {
-                        if (ev.type === 'coin_collected') {
-                            this.playCoinFX(ev.x, ev.y);
-                        } else if (ev.type === 'hit') {
+                        if (ev.type === 'coin_collected') this.playCoinFX(ev.x, ev.y);
+                        else if (ev.type === 'hit') {
                             this.cameras.main.shake(80, 0.004);
                             this.spawnParticles(ev.x, ev.y);
                         } else if (ev.type === 'interval_reached') {
@@ -514,24 +485,25 @@
             // --------------------------------------------------------------------
             // FX
             // --------------------------------------------------------------------
-            playFlapJuice(v, dir) {
+            playFlapJuice(v) {
                 const stretchY = 1.6, squishX = 0.6;
                 const slant = (Math.random() - 0.5) * 30;
+                const base = PLAYER_BASE_SCALE;
                 this.tweens.killTweensOf(v.sprite);
                 this.tweens.chain({
                     targets: v.sprite,
                     tweens: [
                         {
-                            scaleX: squishX * PLAYER_BASE_SCALE, scaleY: stretchY * PLAYER_BASE_SCALE,
-                            angle: slant, duration: 120, ease: 'Sine.easeOut'
+                            scaleX: squishX * base, scaleY: stretchY * base, angle: slant,
+                            duration: 120, ease: 'Sine.easeOut'
                         },
                         {
-                            scaleX: 1.3 * PLAYER_BASE_SCALE / PLAYER_BASE_SCALE * PLAYER_BASE_SCALE, scaleY: 0.8 * PLAYER_BASE_SCALE,
-                            angle: -slant * 0.5, duration: 180, ease: 'Quad.easeInOut'
+                            scaleX: 1.3 * base, scaleY: 0.8 * base, angle: -slant * 0.5,
+                            duration: 180, ease: 'Quad.easeInOut'
                         },
                         {
-                            scaleX: PLAYER_BASE_SCALE, scaleY: PLAYER_BASE_SCALE,
-                            angle: 0, duration: 400, ease: 'Elastic.easeOut', easeParams: [1, 0.5]
+                            scaleX: base, scaleY: base, angle: 0,
+                            duration: 400, ease: 'Elastic.easeOut', easeParams: [1, 0.5]
                         }
                     ]
                 });
@@ -558,7 +530,7 @@
                     this.tweens.add({
                         targets: p,
                         x: p.x + vx * 0.6,
-                        y: p.y + vy * 0.6 + 800 * 0.6 * 0.6 / 2,
+                        y: p.y + vy * 0.6 + 144,
                         alpha: 0, scale: 0.1, angle: Math.random() * 360,
                         duration: 600, ease: 'Cubic.easeIn',
                         onComplete: () => p.destroy()
@@ -567,7 +539,7 @@
             }
 
             // --------------------------------------------------------------------
-            // Game-over overlay (shown for the local player only).
+            // Game-over overlay
             // --------------------------------------------------------------------
             showGameOver(finalScore) {
                 if (this.gameOverOverlayShown) return;
@@ -605,22 +577,19 @@
                 ).setOrigin(0.5).setScrollFactor(0).setDepth(202);
 
                 this._restartButton.on('pointerdown', () => {
-                    // Simplest restart: reload page so we get a fresh session.
                     window.location.reload();
                 });
             }
 
             // --------------------------------------------------------------------
-            // Per-frame update: parallax, eye smoothing, spike undulation.
+            // Per-frame update
             // --------------------------------------------------------------------
             update(time, delta) {
-                // Parallax follow.
                 if (this.bgFar && this.bgMid) {
                     this.bgFar.tilePositionY = this.cameras.main.scrollY * 0.1;
                     this.bgMid.tilePositionY = this.cameras.main.scrollY * 0.3;
                 }
 
-                // Eye smoothing for each player visual.
                 for (const v of this.playerVisuals.values()) {
                     v.currentEye.x += (v.targetEye.x - v.currentEye.x) * 0.15;
                     v.currentEye.y += (v.targetEye.y - v.currentEye.y) * 0.15;
@@ -636,7 +605,6 @@
                     v.pupilRight.y = v.eyeRight.y + v.currentPupil.y;
                 }
 
-                // Spike undulation.
                 if (this.spikes) {
                     this.spikes.forEach((s, idx) => {
                         s.y = Math.sin((time / 200) + idx) * 10;
