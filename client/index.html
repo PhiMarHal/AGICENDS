@@ -64,6 +64,30 @@
         const PLAYER_BASE_SCALE = 1.2;
         const WORLD_HEIGHT_UP = 200000;
 
+        // Physics constants — MUST match server's SIM exactly. If these drift, the
+        // client's prediction diverges from the server and every snapshot will
+        // produce a visible correction.
+        const SIM = {
+            GRAVITY: 1600,
+            JUMP_FORCE: 650,
+            HORIZONTAL_SPEED: 400,
+            MAX_FALL_SPEED: 800,
+            WALL_THICKNESS: 35,
+            FLAP_COOLDOWN_MS: 200,
+            START_Y_OFFSET: 200,
+            PLAYER_RADIUS: 30,
+            PLAYER_BOUNCE: 2.0,
+        };
+
+        // How aggressively to pull the predicted state toward the server's snapshot.
+        // Per-frame lerp factor. Higher = snappier corrections, more visible jitter
+        // on disagreement. Lower = smoother but the player can feel rubber-bandy.
+        const RECONCILE_LERP = 0.15;
+        // Velocity lerp is gentler — velocity disagreements are less visually jarring
+        // than position disagreements, and aggressive velocity correction interferes
+        // with the predicted physics integration.
+        const RECONCILE_VEL_LERP = 0.08;
+
         const COLORS = {
             background: '#ffffff',
             primary: '#000000',
@@ -82,7 +106,6 @@
 
         let ws = null;
         let mySessionId = null;
-        let latestSnapshot = null;
         let pendingWorldInit = null;
         let pendingSnapshots = [];
         let sceneReady = false;
@@ -102,7 +125,6 @@
                     if (sceneReady && window.__scene) window.__scene.applyWorldInit(msg);
                     else pendingWorldInit = msg;
                 } else if (msg.type === 'snapshot') {
-                    latestSnapshot = msg;
                     if (sceneReady && window.__scene) window.__scene.applySnapshot(msg);
                     else pendingSnapshots.push(msg);
                 }
@@ -133,9 +155,19 @@
                 this.previousAlive = new Map();
 
                 this.gameOverOverlayShown = false;
-
-                // Continuous-input state.
                 this.spaceKeyDown = false;
+
+                // Client-side prediction state for MY player.
+                // null until I receive my first snapshot containing my own data.
+                // Once initialized, this is the authoritative source for my sprite's position.
+                this.myState = null;
+
+                // The latest server snapshot's data for me (target for reconciliation).
+                this.myServerTarget = null;
+
+                // True for the frame following a flap input — we need to apply the
+                // flap to myState in update() so it lines up with the physics step.
+                this.flapPending = false;
             }
 
             create() {
@@ -147,14 +179,12 @@
                     CANVAS_WIDTH, CANVAS_HEIGHT + WORLD_HEIGHT_UP
                 );
 
-                // Parallax backgrounds.
                 const bgScale = CANVAS_WIDTH / 1024;
                 this.bgFar = this.add.tileSprite(CANVAS_WIDTH / 2, 0, 1024, 2048, 'bg_far')
                     .setOrigin(0.5, 0).setScrollFactor(0).setDepth(-10).setScale(bgScale);
                 this.bgMid = this.add.tileSprite(CANVAS_WIDTH / 2, 0, 1024, 2048, 'bg_mid')
                     .setOrigin(0.5, 0).setScrollFactor(0).setDepth(-9).setScale(bgScale);
 
-                // Spike container.
                 this.spikeContainer = this.add.container(0, CANVAS_HEIGHT + 50);
                 this.spikeContainer.setDepth(5);
                 const spikeBgHeight = 4000;
@@ -171,7 +201,6 @@
                     this.spikes.push(s);
                 }
 
-                // UI.
                 this.scoreText = this.add.text(CANVAS_WIDTH / 2, 50, '0', {
                     fontFamily: 'Arial',
                     fontSize: '56px',
@@ -187,12 +216,6 @@
                 }
                 ).setOrigin(0.5).setDepth(20).setScrollFactor(0);
 
-                // Inputs:
-                // Pointer (mouse / touch): handled in update() by checking activePointer.isDown.
-                // We DON'T register a pointerdown listener anymore — that only fires once per
-                // press, and we want continuous flapping while held.
-                // We just need to filter clicks on the restart button.
-                // Keyboard space: also handled in update() via key.isDown for hold-to-flap.
                 this.spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
 
                 sceneReady = true;
@@ -205,7 +228,7 @@
             }
 
             // --------------------------------------------------------------------
-            // Textures
+            // Textures (unchanged)
             // --------------------------------------------------------------------
             generateTextures() {
                 const cPrimary = Phaser.Display.Color.HexStringToColor(COLORS.primary).color;
@@ -380,6 +403,7 @@
             // Per-tick snapshot
             // --------------------------------------------------------------------
             applySnapshot(snap) {
+                // World deltas first.
                 if (snap.newSideWallSegments) for (const seg of snap.newSideWallSegments) this.spawnSideWallSegment(seg);
                 if (snap.newBlocks) for (const b of snap.newBlocks) this.spawnBlockSprite(b);
                 if (snap.newCoins) for (const c of snap.newCoins) this.spawnCoinSprite(c);
@@ -400,53 +424,93 @@
 
                 if (snap.spikeY != null) this.spikeContainer.y = snap.spikeY;
 
+                // Players.
                 const seenIds = new Set();
                 for (const id in snap.players) {
                     seenIds.add(id);
                     const p = snap.players[id];
+                    const isMe = (id === mySessionId);
+
                     let v = this.playerVisuals.get(id);
                     if (!v) {
-                        v = this.createPlayerVisual(id, id === mySessionId);
+                        v = this.createPlayerVisual(id, isMe);
                         this.playerVisuals.set(id, v);
-                        if (id === mySessionId) {
+                        if (isMe) {
                             this.cameraTarget = v.sprite;
                             this.cameras.main.startFollow(v.sprite, true, 0.1, 0.1);
                         }
                     }
 
-                    v.sprite.x = p.x;
-                    v.sprite.y = p.y;
-                    v.eyesContainer.x = p.x;
-                    v.eyesContainer.y = p.y;
-
-                    const prevVx = v.lastVx;
-                    if (Math.abs(p.vx) > 50 && Math.sign(p.vx) !== Math.sign(prevVx) && p.alive) {
-                        this.playFlapJuice(v);
-                    }
-                    v.lastVx = p.vx;
-
-                    v.targetEye.x = Phaser.Math.Clamp(p.vx / 20, -6, 6);
-                    v.targetEye.y = Phaser.Math.Clamp(p.vy / 40, -4, 4);
-                    v.targetPupil.x = v.targetEye.x * 0.5;
-                    v.targetPupil.y = v.targetEye.y * 0.5;
-
-                    const wasAlive = this.previousAlive.get(id);
-                    if (wasAlive !== false && p.alive === false) {
-                        v.sprite.setTint(0xff0000);
-                        v.eyesContainer.setVisible(false);
-                        if (id === mySessionId) this.showGameOver(p.score);
-                    }
-                    this.previousAlive.set(id, p.alive);
-
-                    if (id === mySessionId && this.scoreText) {
-                        const s = (p.score || 0).toString();
-                        if (this.scoreText.text !== s) {
-                            this.scoreText.setText(s);
-                            this.tweens.add({ targets: this.scoreText, scale: 1.2, duration: 100, yoyo: true });
+                    if (isMe) {
+                        // Initialize my predicted state from first server data.
+                        if (this.myState === null) {
+                            this.myState = {
+                                x: p.x, y: p.y, vx: p.vx, vy: p.vy,
+                                alive: p.alive,
+                                lastFlapTime: -Infinity,
+                                nextFlapDirection: 1,
+                            };
                         }
+
+                        // Save the server's authoritative target for reconciliation in update().
+                        this.myServerTarget = {
+                            x: p.x, y: p.y, vx: p.vx, vy: p.vy,
+                            alive: p.alive,
+                            score: p.score,
+                            hasStarted: snap.hasStarted,
+                        };
+
+                        // Death is decisive — snap immediately, no smooth lerp.
+                        if (this.myState.alive && !p.alive) {
+                            this.myState.alive = false;
+                        }
+
+                        // Score update.
+                        if (this.scoreText) {
+                            const s = (p.score || 0).toString();
+                            if (this.scoreText.text !== s) {
+                                this.scoreText.setText(s);
+                                this.tweens.add({ targets: this.scoreText, scale: 1.2, duration: 100, yoyo: true });
+                            }
+                        }
+
+                        // Death overlay trigger.
+                        const wasAlive = this.previousAlive.get(id);
+                        if (wasAlive !== false && p.alive === false) {
+                            v.sprite.setTint(0xff0000);
+                            v.eyesContainer.setVisible(false);
+                            this.showGameOver(p.score);
+                        }
+                        this.previousAlive.set(id, p.alive);
+                    } else {
+                        // Other players: place sprite directly from snapshot (interpolation
+                        // comes in the next pass).
+                        v.sprite.x = p.x;
+                        v.sprite.y = p.y;
+                        v.eyesContainer.x = p.x;
+                        v.eyesContainer.y = p.y;
+
+                        const prevVx = v.lastVx;
+                        if (Math.abs(p.vx) > 50 && Math.sign(p.vx) !== Math.sign(prevVx) && p.alive) {
+                            this.playFlapJuice(v);
+                        }
+                        v.lastVx = p.vx;
+
+                        v.targetEye.x = Phaser.Math.Clamp(p.vx / 20, -6, 6);
+                        v.targetEye.y = Phaser.Math.Clamp(p.vy / 40, -4, 4);
+                        v.targetPupil.x = v.targetEye.x * 0.5;
+                        v.targetPupil.y = v.targetEye.y * 0.5;
+
+                        const wasAlive = this.previousAlive.get(id);
+                        if (wasAlive !== false && p.alive === false) {
+                            v.sprite.setTint(0xff0000);
+                            v.eyesContainer.setVisible(false);
+                        }
+                        this.previousAlive.set(id, p.alive);
                     }
                 }
 
+                // Cleanup departed players.
                 for (const [id, v] of this.playerVisuals) {
                     if (!seenIds.has(id)) {
                         this.destroyPlayerVisual(v);
@@ -575,28 +639,107 @@
             }
 
             // --------------------------------------------------------------------
+            // Apply a flap to my predicted state (called the moment the input fires).
+            // Mirrors server's flap logic, including the cooldown.
+            // --------------------------------------------------------------------
+            applyFlapToMyState() {
+                if (!this.myState || !this.myState.alive) return false;
+                // We use Date.now() for cooldown checking — same as server's elapsed-ms basis.
+                const now = performance.now();
+                if (now - this.myState.lastFlapTime < SIM.FLAP_COOLDOWN_MS) return false;
+
+                this.myState.vy = -SIM.JUMP_FORCE;
+                this.myState.vx = SIM.HORIZONTAL_SPEED * this.myState.nextFlapDirection;
+                this.myState.nextFlapDirection = (this.myState.nextFlapDirection === 1) ? -1 : 1;
+                this.myState.lastFlapTime = now;
+                return true;
+            }
+
+            // Run one physics step on my predicted state. Mirrors server's step()
+            // but only for my player and without block-collision logic (block
+            // disagreements get smoothed via reconciliation).
+            stepMyState(deltaSeconds) {
+                if (!this.myState || !this.myState.alive) return;
+                // If the game hasn't started server-side yet, don't integrate. Holds the
+                // player on the start "platform" until the first flap commits.
+                if (this.myServerTarget && !this.myServerTarget.hasStarted) return;
+
+                const s = this.myState;
+                s.vy += SIM.GRAVITY * deltaSeconds;
+                if (s.vy > SIM.MAX_FALL_SPEED) s.vy = SIM.MAX_FALL_SPEED;
+
+                s.x += s.vx * deltaSeconds;
+                s.y += s.vy * deltaSeconds;
+
+                // Wall clamp (matches server).
+                const minX = SIM.WALL_THICKNESS + SIM.PLAYER_RADIUS;
+                const maxX = CANVAS_WIDTH - SIM.WALL_THICKNESS - SIM.PLAYER_RADIUS;
+                if (s.x < minX) { s.x = minX; s.vx = -s.vx * SIM.PLAYER_BOUNCE * 0.3; }
+                if (s.x > maxX) { s.x = maxX; s.vx = -s.vx * SIM.PLAYER_BOUNCE * 0.3; }
+            }
+
+            // Reconcile predicted state toward the server's authoritative target.
+            reconcileMyState() {
+                if (!this.myState || !this.myServerTarget) return;
+                if (!this.myState.alive) return; // dead = pinned where the server says
+
+                const t = this.myServerTarget;
+                this.myState.x += (t.x - this.myState.x) * RECONCILE_LERP;
+                this.myState.y += (t.y - this.myState.y) * RECONCILE_LERP;
+                this.myState.vx += (t.vx - this.myState.vx) * RECONCILE_VEL_LERP;
+                this.myState.vy += (t.vy - this.myState.vy) * RECONCILE_VEL_LERP;
+            }
+
+            // --------------------------------------------------------------------
             // Per-frame update
             // --------------------------------------------------------------------
             update(time, delta) {
+                const dt = delta / 1000;
+
                 if (this.bgFar && this.bgMid) {
                     this.bgFar.tilePositionY = this.cameras.main.scrollY * 0.1;
                     this.bgMid.tilePositionY = this.cameras.main.scrollY * 0.3;
                 }
 
-                // Continuous flap input — matches single-player behavior.
-                // The server's per-player FLAP_COOLDOWN_MS rate-limits naturally, so
-                // sending every frame is fine. Skip if the game-over overlay is up to
-                // avoid the click on RELOAD also triggering a flap.
+                // Continuous flap input.
+                let flappedThisFrame = false;
                 if (!this.gameOverOverlayShown) {
                     const pointer = this.input.activePointer;
-                    if (pointer && pointer.isDown) {
+                    const isHeld = (pointer && pointer.isDown) || (this.spaceKey && this.spaceKey.isDown);
+                    if (isHeld) {
+                        // Apply locally first for instant visual response.
+                        const localFlap = this.applyFlapToMyState();
+                        if (localFlap) {
+                            const myV = this.playerVisuals.get(mySessionId);
+                            if (myV) this.playFlapJuice(myV);
+                        }
+                        // Tell the server every frame; server's cooldown rate-limits.
                         sendFlap();
-                    }
-                    if (this.spaceKey && this.spaceKey.isDown) {
-                        sendFlap();
+                        flappedThisFrame = localFlap;
                     }
                 }
 
+                // Run one physics step on my predicted state, then reconcile gently.
+                this.stepMyState(dt);
+                this.reconcileMyState();
+
+                // Apply predicted state to my sprite.
+                if (this.myState) {
+                    const myV = this.playerVisuals.get(mySessionId);
+                    if (myV) {
+                        myV.sprite.x = this.myState.x;
+                        myV.sprite.y = this.myState.y;
+                        myV.eyesContainer.x = this.myState.x;
+                        myV.eyesContainer.y = this.myState.y;
+
+                        myV.targetEye.x = Phaser.Math.Clamp(this.myState.vx / 20, -6, 6);
+                        myV.targetEye.y = Phaser.Math.Clamp(this.myState.vy / 40, -4, 4);
+                        myV.targetPupil.x = myV.targetEye.x * 0.5;
+                        myV.targetPupil.y = myV.targetEye.y * 0.5;
+                    }
+                }
+
+                // Eye smoothing for ALL players (including me).
                 for (const v of this.playerVisuals.values()) {
                     v.currentEye.x += (v.targetEye.x - v.currentEye.x) * 0.15;
                     v.currentEye.y += (v.targetEye.y - v.currentEye.y) * 0.15;
