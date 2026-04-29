@@ -133,6 +133,9 @@
                 this.previousAlive = new Map();
 
                 this.gameOverOverlayShown = false;
+
+                // Continuous-input state.
+                this.spaceKeyDown = false;
             }
 
             create() {
@@ -184,13 +187,13 @@
                 }
                 ).setOrigin(0.5).setDepth(20).setScrollFactor(0);
 
-                this.input.on('pointerdown', (pointer, currentlyOver) => {
-                    for (const obj of currentlyOver) {
-                        if (obj === this._restartButton) return;
-                    }
-                    sendFlap();
-                });
-                this.input.keyboard.on('keydown-SPACE', () => sendFlap());
+                // Inputs:
+                // Pointer (mouse / touch): handled in update() by checking activePointer.isDown.
+                // We DON'T register a pointerdown listener anymore — that only fires once per
+                // press, and we want continuous flapping while held.
+                // We just need to filter clicks on the restart button.
+                // Keyboard space: also handled in update() via key.isDown for hold-to-flap.
+                this.spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
 
                 sceneReady = true;
                 window.__scene = this;
@@ -207,14 +210,12 @@
             generateTextures() {
                 const cPrimary = Phaser.Display.Color.HexStringToColor(COLORS.primary).color;
 
-                // Player.
                 const pG = this.make.graphics();
                 pG.fillStyle(cPrimary);
                 pG.fillCircle(30, 30, 30);
                 pG.generateTexture('player', 60, 60);
                 pG.destroy();
 
-                // Coin.
                 const cG = this.make.graphics();
                 cG.fillStyle(0x000000);
                 cG.lineStyle(2, 0xffffff);
@@ -224,28 +225,24 @@
                 cG.generateTexture('coin', COIN_SIZE, COIN_SIZE);
                 cG.destroy();
 
-                // Particle.
                 const ptG = this.make.graphics();
                 ptG.fillStyle(0x000000);
                 ptG.fillRect(0, 0, 8, 8);
                 ptG.generateTexture('particle', 8, 8);
                 ptG.destroy();
 
-                // Block — rounded black square. Used for both obstacles AND side walls.
                 const wG = this.make.graphics();
                 wG.fillStyle(cPrimary);
                 wG.fillRoundedRect(0, 0, BLOCK_RENDER_SIZE, BLOCK_RENDER_SIZE, 24);
                 wG.generateTexture('block', BLOCK_RENDER_SIZE, BLOCK_RENDER_SIZE);
                 wG.destroy();
 
-                // Spike.
                 const sG = this.make.graphics();
                 sG.fillStyle(Phaser.Display.Color.HexStringToColor(COLORS.hazard).color);
                 sG.fillTriangle(64, 0, 0, 128, 128, 128);
                 sG.generateTexture('spike_single', 128, 128);
                 sG.destroy();
 
-                // Parallax backgrounds.
                 this.generateBackgroundTexture('bg_far',
                     {
                         fill: '#d0d0d0', centerBandW: 240, towerW: 120, towerDist: 360,
@@ -372,9 +369,6 @@
                 this.tweens.add({ targets: sprite, angle: 360, duration: 1200, repeat: -1 });
             }
 
-            // Side wall segment — uses the rounded `block` texture so adjacent
-            // segments visually read as stacked rounded tiles instead of one solid bar.
-            // Texture is BLOCK_RENDER_SIZE (90px) but we display it at WALL_THICKNESS (35px).
             spawnSideWallSegment(seg) {
                 const wt = WALL_THICKNESS;
                 const left = this.add.image(wt / 2, seg.y, 'block').setDisplaySize(wt, wt).setDepth(2);
@@ -425,7 +419,6 @@
                     v.eyesContainer.x = p.x;
                     v.eyesContainer.y = p.y;
 
-                    // Detect flap event for squish-stretch FX.
                     const prevVx = v.lastVx;
                     if (Math.abs(p.vx) > 50 && Math.sign(p.vx) !== Math.sign(prevVx) && p.alive) {
                         this.playFlapJuice(v);
@@ -539,7 +532,7 @@
             }
 
             // --------------------------------------------------------------------
-            // Game-over overlay
+            // Game over
             // --------------------------------------------------------------------
             showGameOver(finalScore) {
                 if (this.gameOverOverlayShown) return;
@@ -588,6 +581,20 @@
                 if (this.bgFar && this.bgMid) {
                     this.bgFar.tilePositionY = this.cameras.main.scrollY * 0.1;
                     this.bgMid.tilePositionY = this.cameras.main.scrollY * 0.3;
+                }
+
+                // Continuous flap input — matches single-player behavior.
+                // The server's per-player FLAP_COOLDOWN_MS rate-limits naturally, so
+                // sending every frame is fine. Skip if the game-over overlay is up to
+                // avoid the click on RELOAD also triggering a flap.
+                if (!this.gameOverOverlayShown) {
+                    const pointer = this.input.activePointer;
+                    if (pointer && pointer.isDown) {
+                        sendFlap();
+                    }
+                    if (this.spaceKey && this.spaceKey.isDown) {
+                        sendFlap();
+                    }
                 }
 
                 for (const v of this.playerVisuals.values()) {
