@@ -84,19 +84,18 @@
             if (s.vy < -SIM.MAX_VY_UP) s.vy = -SIM.MAX_VY_UP;
         }
 
-        // Position reconciliation runs every frame regardless — server is the source
-        // of truth for where the player actually is.
         const RECONCILE_LERP = 0.15;
-
-        // Velocity reconciliation runs at this rate normally.
         const RECONCILE_VEL_LERP = 0.08;
-
-        // After a local flap, we briefly skip velocity reconciliation. This window
-        // covers the round-trip during which the server hasn't yet acknowledged the
-        // flap, so its snapshot's vx still reflects the previous flap's direction.
-        // 150ms is enough to absorb a typical localhost-to-LAN round trip without
-        // delaying genuine corrections for too long.
         const POST_FLAP_VEL_GRACE_MS = 150;
+
+        // Interpolation: how far behind real-time we render other players.
+        // 100ms is the classic value — smooth enough that snapshot jitter is hidden,
+        // recent enough that the lag isn't visually noticeable.
+        const INTERP_DELAY_MS = 100;
+
+        // Drop snapshot history older than this. Plenty of room for finding
+        // bracketing pairs around render time.
+        const INTERP_BUFFER_MAX_AGE_MS = 500;
 
         const COLORS = {
             background: '#ffffff',
@@ -155,6 +154,15 @@
                 this.gameOverOverlayShown = false;
                 this.myState = null;
                 this.myServerTarget = null;
+
+                // Interpolation state.
+                // For each remote player: a buffer of recent snapshots, ordered by tServer ascending.
+                // Each entry: { tServer, x, y, vx, vy, alive }.
+                this.interpBuffers = new Map();
+
+                // The latest server time we've seen across all snapshots. Render time
+                // is computed from this minus INTERP_DELAY_MS.
+                this.latestServerTime = 0;
             }
 
             create() {
@@ -361,7 +369,77 @@
                 this.sideWallSprites.push(left, right);
             }
 
+            // Push a snapshot's data for a remote player into the interp buffer.
+            pushInterpSample(id, tServer, p) {
+                let buf = this.interpBuffers.get(id);
+                if (!buf) {
+                    buf = [];
+                    this.interpBuffers.set(id, buf);
+                }
+                buf.push({
+                    tServer,
+                    x: p.x, y: p.y,
+                    vx: p.vx, vy: p.vy,
+                    alive: p.alive,
+                });
+                // Trim old entries.
+                const cutoff = tServer - INTERP_BUFFER_MAX_AGE_MS;
+                while (buf.length > 0 && buf[0].tServer < cutoff) buf.shift();
+            }
+
+            // Look up an interpolated state for a remote player at the given render time.
+            // Returns null if no data is available yet.
+            sampleInterpState(id, renderTime) {
+                const buf = this.interpBuffers.get(id);
+                if (!buf || buf.length === 0) return null;
+
+                // If render time is older than everything we have, return our oldest sample.
+                if (renderTime <= buf[0].tServer) {
+                    return buf[0];
+                }
+
+                // If render time is newer than newest sample, hold position at newest.
+                // (We could extrapolate using vx/vy, but holding looks cleaner when
+                // snapshots briefly stop arriving.)
+                if (renderTime >= buf[buf.length - 1].tServer) {
+                    return buf[buf.length - 1];
+                }
+
+                // Find the bracketing pair: the latest sample with tServer <= renderTime,
+                // and the next one. Walking from the end is typically faster since
+                // renderTime tends to be near the recent end.
+                for (let i = buf.length - 1; i > 0; i--) {
+                    if (buf[i - 1].tServer <= renderTime && renderTime <= buf[i].tServer) {
+                        const a = buf[i - 1];
+                        const b = buf[i];
+                        const span = b.tServer - a.tServer;
+                        // Fallback: if the two samples have the same timestamp, just use the older.
+                        if (span <= 0) return a;
+                        const t = (renderTime - a.tServer) / span;
+                        return {
+                            tServer: renderTime,
+                            x: a.x + (b.x - a.x) * t,
+                            y: a.y + (b.y - a.y) * t,
+                            vx: a.vx + (b.vx - a.vx) * t,
+                            vy: a.vy + (b.vy - a.vy) * t,
+                            // Alive flag: take the older one's value until we cross to the
+                            // newer one. This means the death visual happens at exactly the
+                            // interpolated moment of the transition snapshot.
+                            alive: t < 1.0 ? a.alive : b.alive,
+                        };
+                    }
+                }
+
+                // Shouldn't reach here, but just in case:
+                return buf[buf.length - 1];
+            }
+
             applySnapshot(snap) {
+                // Track the latest server time across all snapshots received.
+                if (snap.tServer != null && snap.tServer > this.latestServerTime) {
+                    this.latestServerTime = snap.tServer;
+                }
+
                 if (snap.newSideWallSegments) for (const seg of snap.newSideWallSegments) this.spawnSideWallSegment(seg);
                 if (snap.newBlocks) for (const b of snap.newBlocks) this.spawnBlockSprite(b);
                 if (snap.newCoins) for (const c of snap.newCoins) this.spawnCoinSprite(c);
@@ -398,6 +476,7 @@
                     }
 
                     if (isMe) {
+                        // My player: prediction + reconciliation, handled in update().
                         if (this.myState === null) {
                             this.myState = {
                                 x: p.x, y: p.y, vx: p.vx, vy: p.vy,
@@ -429,35 +508,18 @@
                         }
                         this.previousAlive.set(id, p.alive);
                     } else {
-                        v.sprite.x = p.x;
-                        v.sprite.y = p.y;
-                        v.eyesContainer.x = p.x;
-                        v.eyesContainer.y = p.y;
-
-                        const prevVx = v.lastVx;
-                        if (Math.abs(p.vx) > 50 && Math.sign(p.vx) !== Math.sign(prevVx) && p.alive) {
-                            this.playFlapJuice(v);
-                        }
-                        v.lastVx = p.vx;
-
-                        v.targetEye.x = Phaser.Math.Clamp(p.vx / 20, -6, 6);
-                        v.targetEye.y = Phaser.Math.Clamp(p.vy / 40, -4, 4);
-                        v.targetPupil.x = v.targetEye.x * 0.5;
-                        v.targetPupil.y = v.targetEye.y * 0.5;
-
-                        const wasAlive = this.previousAlive.get(id);
-                        if (wasAlive !== false && p.alive === false) {
-                            v.sprite.setTint(0xff0000);
-                            v.eyesContainer.setVisible(false);
-                        }
-                        this.previousAlive.set(id, p.alive);
+                        // Remote player: push to interp buffer. Sprite positioning happens
+                        // every frame in update() using the buffered samples.
+                        this.pushInterpSample(id, snap.tServer || 0, p);
                     }
                 }
 
+                // Players removed from the snapshot: clean up.
                 for (const [id, v] of this.playerVisuals) {
                     if (!seenIds.has(id)) {
                         this.destroyPlayerVisual(v);
                         this.playerVisuals.delete(id);
+                        this.interpBuffers.delete(id);
                         if (this.cameraTarget === v.sprite) {
                             this.cameraTarget = null;
                             this.cameras.main.stopFollow();
@@ -613,20 +675,55 @@
                 if (!this.myState || !this.myServerTarget) return;
                 if (!this.myState.alive) return;
                 const t = this.myServerTarget;
-
-                // Position reconciliation always runs — server owns the truth of "where".
                 this.myState.x += (t.x - this.myState.x) * RECONCILE_LERP;
                 this.myState.y += (t.y - this.myState.y) * RECONCILE_LERP;
 
-                // Velocity reconciliation skips during a brief window after each local
-                // flap. While the flap is in flight, the most recent snapshot's vx
-                // reflects the previous flap's direction, and pulling toward it would
-                // cause visible shimmer during continuous flapping.
                 const now = performance.now();
                 const sinceLastFlap = now - this.myState.lastFlapTime;
                 if (sinceLastFlap > POST_FLAP_VEL_GRACE_MS) {
                     this.myState.vx += (t.vx - this.myState.vx) * RECONCILE_VEL_LERP;
                     this.myState.vy += (t.vy - this.myState.vy) * RECONCILE_VEL_LERP;
+                }
+            }
+
+            // Position remote players using their interpolation buffer.
+            // Called every frame in update().
+            updateRemotePlayerVisuals() {
+                const renderTime = this.latestServerTime - INTERP_DELAY_MS;
+
+                for (const [id, v] of this.playerVisuals) {
+                    if (id === mySessionId) continue;
+
+                    const sample = this.sampleInterpState(id, renderTime);
+                    if (!sample) continue;
+
+                    v.sprite.x = sample.x;
+                    v.sprite.y = sample.y;
+                    v.eyesContainer.x = sample.x;
+                    v.eyesContainer.y = sample.y;
+
+                    // Detect a flap (vx sign flip) using the interpolated vx so the
+                    // squish-stretch fires at the visually correct moment, not when
+                    // the snapshot first arrived.
+                    const prevVx = v.lastVx;
+                    if (Math.abs(sample.vx) > 50 && Math.sign(sample.vx) !== Math.sign(prevVx) && sample.alive) {
+                        this.playFlapJuice(v);
+                    }
+                    v.lastVx = sample.vx;
+
+                    // Eye direction follows the interpolated velocity.
+                    v.targetEye.x = Phaser.Math.Clamp(sample.vx / 20, -6, 6);
+                    v.targetEye.y = Phaser.Math.Clamp(sample.vy / 40, -4, 4);
+                    v.targetPupil.x = v.targetEye.x * 0.5;
+                    v.targetPupil.y = v.targetEye.y * 0.5;
+
+                    // Death transition for remote players.
+                    const wasAlive = this.previousAlive.get(id);
+                    if (wasAlive !== false && sample.alive === false) {
+                        v.sprite.setTint(0xff0000);
+                        v.eyesContainer.setVisible(false);
+                    }
+                    this.previousAlive.set(id, sample.alive);
                 }
             }
 
@@ -669,6 +766,10 @@
                     }
                 }
 
+                // Position remote players via interpolation.
+                this.updateRemotePlayerVisuals();
+
+                // Eye smoothing for ALL players (mine + remotes).
                 for (const v of this.playerVisuals.values()) {
                     v.currentEye.x += (v.targetEye.x - v.currentEye.x) * 0.15;
                     v.currentEye.y += (v.targetEye.y - v.currentEye.y) * 0.15;
