@@ -56,8 +56,6 @@
         const CANVAS_WIDTH = 720;
         const CANVAS_HEIGHT = 1080;
         const WALL_THICKNESS = 35;
-        // Side-wall segments rendered slightly smaller than WALL_THICKNESS so the
-        // rounded block texture creates a visible gap between stacked tiles.
         const SIDE_WALL_DISPLAY_SIZE = WALL_THICKNESS * 0.9;
         const BLOCK_RENDER_SIZE = 90;
         const COIN_SIZE = 45;
@@ -69,7 +67,6 @@
             JUMP_FORCE: 650,
             HORIZONTAL_SPEED: 400,
             MAX_FALL_SPEED: 800,
-            // Hard velocity caps — match server.
             MAX_VX: 800,
             MAX_VY_UP: 2400,
             MAX_VY_DOWN: 2400,
@@ -87,8 +84,19 @@
             if (s.vy < -SIM.MAX_VY_UP) s.vy = -SIM.MAX_VY_UP;
         }
 
+        // Position reconciliation runs every frame regardless — server is the source
+        // of truth for where the player actually is.
         const RECONCILE_LERP = 0.15;
+
+        // Velocity reconciliation runs at this rate normally.
         const RECONCILE_VEL_LERP = 0.08;
+
+        // After a local flap, we briefly skip velocity reconciliation. This window
+        // covers the round-trip during which the server hasn't yet acknowledged the
+        // flap, so its snapshot's vx still reflects the previous flap's direction.
+        // 150ms is enough to absorb a typical localhost-to-LAN round trip without
+        // delaying genuine corrections for too long.
+        const POST_FLAP_VEL_GRACE_MS = 150;
 
         const COLORS = {
             background: '#ffffff',
@@ -605,10 +613,21 @@
                 if (!this.myState || !this.myServerTarget) return;
                 if (!this.myState.alive) return;
                 const t = this.myServerTarget;
+
+                // Position reconciliation always runs — server owns the truth of "where".
                 this.myState.x += (t.x - this.myState.x) * RECONCILE_LERP;
                 this.myState.y += (t.y - this.myState.y) * RECONCILE_LERP;
-                this.myState.vx += (t.vx - this.myState.vx) * RECONCILE_VEL_LERP;
-                this.myState.vy += (t.vy - this.myState.vy) * RECONCILE_VEL_LERP;
+
+                // Velocity reconciliation skips during a brief window after each local
+                // flap. While the flap is in flight, the most recent snapshot's vx
+                // reflects the previous flap's direction, and pulling toward it would
+                // cause visible shimmer during continuous flapping.
+                const now = performance.now();
+                const sinceLastFlap = now - this.myState.lastFlapTime;
+                if (sinceLastFlap > POST_FLAP_VEL_GRACE_MS) {
+                    this.myState.vx += (t.vx - this.myState.vx) * RECONCILE_VEL_LERP;
+                    this.myState.vy += (t.vy - this.myState.vy) * RECONCILE_VEL_LERP;
+                }
             }
 
             update(time, delta) {
