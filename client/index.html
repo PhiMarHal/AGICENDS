@@ -1,13 +1,12 @@
 <!doctype html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AGISCEND</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>AGISCENDS</title>
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.87.0/dist/phaser.min.js"></script>
   <style>
-    html,
-    body {
+    html, body {
       margin: 0;
       padding: 0;
       width: 100%;
@@ -15,23 +14,19 @@
       overflow: hidden;
       background: #000;
     }
-
     body {
       display: flex;
       justify-content: center;
       align-items: center;
     }
-
     #game-container {
       width: 100%;
       height: 100%;
     }
-
     canvas {
       display: block;
       margin: 0 auto;
     }
-
     #status {
       position: fixed;
       top: 8px;
@@ -46,11 +41,159 @@
     }
   </style>
 </head>
-
 <body>
   <div id="game-container"></div>
   <div id="status">connecting...</div>
-  <script type="module" src="/src/main.ts"></script>
-</body>
 
+  <script>
+    // ========================================================================
+    // Constants. Must match server's SIM constants for consistent rendering.
+    // ========================================================================
+    const CANVAS_WIDTH = 720;
+    const CANVAS_HEIGHT = 1080;
+    const WALL_THICKNESS = 35;
+    const WORLD_HEIGHT_UP = 100000;
+
+    const statusEl = document.getElementById('status');
+    function setStatus(t) { statusEl.textContent = t; }
+
+    // ========================================================================
+    // WebSocket connection. Auto-detects protocol (ws/wss) and host.
+    // ========================================================================
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = wsProtocol + '//' + window.location.host;
+
+    let ws = null;
+    let mySessionId = null;
+    let latestSnapshot = null;
+
+    function connect() {
+      setStatus('connecting...');
+      ws = new WebSocket(wsUrl);
+
+      ws.addEventListener('open', () => {
+        setStatus('connected');
+      });
+
+      ws.addEventListener('message', (event) => {
+        let msg;
+        try { msg = JSON.parse(event.data); }
+        catch { return; }
+
+        if (msg.type === 'welcome') {
+          mySessionId = msg.sessionId;
+          setStatus('you are ' + mySessionId);
+        } else if (msg.type === 'snapshot') {
+          latestSnapshot = msg;
+        }
+      });
+
+      ws.addEventListener('close', () => {
+        setStatus('disconnected');
+      });
+
+      ws.addEventListener('error', (e) => {
+        console.error('ws error', e);
+        setStatus('error');
+      });
+    }
+
+    function sendFlap() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'flap' }));
+      }
+    }
+
+    // ========================================================================
+    // Phaser scene
+    // ========================================================================
+    class GameScene extends Phaser.Scene {
+      constructor() {
+        super({ key: 'GameScene' });
+        this.playerSprites = new Map();
+        this.cameraTarget = null;
+      }
+
+      create() {
+        this.cameras.main.setBackgroundColor('#ffffff');
+        this.cameras.main.setBounds(
+          0, -WORLD_HEIGHT_UP,
+          CANVAS_WIDTH, CANVAS_HEIGHT + WORLD_HEIGHT_UP
+        );
+
+        // Side walls (cosmetic; server enforces clamping).
+        const wallTotalHeight = CANVAS_HEIGHT + WORLD_HEIGHT_UP;
+        const wallCenterY = CANVAS_HEIGHT - wallTotalHeight / 2;
+        this.add.rectangle(WALL_THICKNESS / 2, wallCenterY,
+                           WALL_THICKNESS, wallTotalHeight, 0x000000);
+        this.add.rectangle(CANVAS_WIDTH - WALL_THICKNESS / 2, wallCenterY,
+                           WALL_THICKNESS, wallTotalHeight, 0x000000);
+
+        // Spike bar.
+        this.spikeBar = this.add.rectangle(
+          CANVAS_WIDTH / 2, CANVAS_HEIGHT + 50,
+          CANVAS_WIDTH, 200, 0x000000
+        );
+        this.spikeBar.setOrigin(0.5, 0);
+
+        // Inputs.
+        this.input.on('pointerdown', () => sendFlap());
+        this.input.keyboard.on('keydown-SPACE', () => sendFlap());
+
+        connect();
+      }
+
+      update() {
+        if (!latestSnapshot) return;
+        const snap = latestSnapshot;
+
+        this.spikeBar.y = snap.spikeY;
+
+        const seenIds = new Set();
+        for (const id in snap.players) {
+          seenIds.add(id);
+          const p = snap.players[id];
+          let sprite = this.playerSprites.get(id);
+          if (!sprite) {
+            const isMe = id === mySessionId;
+            sprite = this.add.rectangle(p.x, p.y, 60, 60,
+              isMe ? 0x000000 : 0x666666);
+            this.playerSprites.set(id, sprite);
+            if (isMe) {
+              this.cameraTarget = sprite;
+              this.cameras.main.startFollow(sprite, true, 0.1, 0.1);
+            }
+          }
+          sprite.x = p.x;
+          sprite.y = p.y;
+          sprite.setAlpha(p.alive ? 1.0 : 0.3);
+        }
+
+        for (const [id, sprite] of this.playerSprites) {
+          if (!seenIds.has(id)) {
+            sprite.destroy();
+            this.playerSprites.delete(id);
+            if (this.cameraTarget === sprite) {
+              this.cameraTarget = null;
+              this.cameras.main.stopFollow();
+            }
+          }
+        }
+      }
+    }
+
+    new Phaser.Game({
+      type: Phaser.WEBGL,
+      parent: 'game-container',
+      width: CANVAS_WIDTH,
+      height: CANVAS_HEIGHT,
+      scale: {
+        mode: Phaser.Scale.FIT,
+        autoCenter: Phaser.Scale.CENTER_BOTH,
+      },
+      backgroundColor: '#ffffff',
+      scene: [GameScene],
+    });
+  </script>
+</body>
 </html>
