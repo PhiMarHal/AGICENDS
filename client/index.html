@@ -53,6 +53,104 @@
     <div id="status">connecting...</div>
 
     <script>
+        // ========================================================================
+        // Music — ported 1:1 from single-player.
+        // Same domain (agiscend.loiyaa.com), 21 tracks, 4-second silence between.
+        // ========================================================================
+        const MUSIC_BASE_URL = 'https://agiscend.loiyaa.com/';
+        const MUSIC_IS_LOCAL = window.location.protocol === 'file:';
+        const MUSIC_TRACK_COUNT = 21;
+        const MUSIC_SILENCE_BETWEEN_TRACKS = 4000;
+
+        let musicPlaylist = [];
+        let musicCurrentTrackIndex = 0;
+        let musicAudioElement = null;
+        let musicStarted = false;
+        let musicTransitioning = false;
+        let musicMuted = false;
+
+        function shuffleArray(array) {
+            const arr = [...array];
+            for (let i = arr.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [arr[i], arr[j]] = [arr[j], arr[i]];
+            }
+            return arr;
+        }
+
+        function generateMusicPlaylist() {
+            const tracks = [];
+            for (let i = 1; i <= MUSIC_TRACK_COUNT; i++) {
+                const trackNum = i.toString().padStart(2, '0');
+                const trackPath = MUSIC_IS_LOCAL
+                    ? `assets/track_${trackNum}.mp3`
+                    : `${MUSIC_BASE_URL}assets/track_${trackNum}.mp3`;
+                tracks.push(trackPath);
+            }
+            return shuffleArray(tracks);
+        }
+
+        function playNextTrack() {
+            if (!musicStarted || musicTransitioning) return;
+            musicTransitioning = true;
+
+            if (musicCurrentTrackIndex >= musicPlaylist.length) {
+                musicPlaylist = generateMusicPlaylist();
+                musicCurrentTrackIndex = 0;
+            }
+
+            const trackPath = musicPlaylist[musicCurrentTrackIndex];
+            musicCurrentTrackIndex++;
+
+            if (musicAudioElement) {
+                musicAudioElement.pause();
+                musicAudioElement.removeAttribute('src');
+                musicAudioElement.load();
+                musicAudioElement = null;
+            }
+
+            musicAudioElement = new Audio();
+            musicAudioElement.volume = 0.5;
+            musicAudioElement.muted = musicMuted;
+
+            musicAudioElement.onended = () => {
+                musicTransitioning = false;
+                setTimeout(playNextTrack, MUSIC_SILENCE_BETWEEN_TRACKS);
+            };
+            musicAudioElement.onerror = () => {
+                console.warn('Could not load track:', trackPath);
+                musicTransitioning = false;
+                setTimeout(playNextTrack, 1000);
+            };
+            musicAudioElement.oncanplaythrough = () => {
+                musicTransitioning = false;
+                if (!musicMuted) {
+                    musicAudioElement.play().catch(e => console.warn('Playback failed:', e));
+                }
+            };
+
+            musicAudioElement.src = trackPath;
+            musicAudioElement.load();
+        }
+
+        function startMusic() {
+            if (musicStarted) return;
+            musicStarted = true;
+            musicTransitioning = false;
+            musicPlaylist = generateMusicPlaylist();
+            musicCurrentTrackIndex = 0;
+            playNextTrack();
+        }
+
+        document.addEventListener('visibilitychange', () => {
+            if (!musicAudioElement) return;
+            if (document.hidden) musicAudioElement.pause();
+            else if (musicStarted) musicAudioElement.play().catch(() => { });
+        });
+
+        // ========================================================================
+        // Game constants
+        // ========================================================================
         const CANVAS_WIDTH = 720;
         const CANVAS_HEIGHT = 1080;
         const WALL_THICKNESS = 35;
@@ -67,14 +165,17 @@
             JUMP_FORCE: 650,
             HORIZONTAL_SPEED: 400,
             MAX_FALL_SPEED: 800,
-            MAX_VX: 800,
-            MAX_VY_UP: 2400,
-            MAX_VY_DOWN: 2400,
+            MAX_VX: 800, MAX_VY_UP: 2400, MAX_VY_DOWN: 2400,
             WALL_THICKNESS: 35,
             FLAP_COOLDOWN_MS: 200,
             START_Y_OFFSET: 200,
             PLAYER_RADIUS: 30,
             PLAYER_BOUNCE: 2.0,
+            STUN_DURATION_MS: 400,
+            PENTAGON_SIZE: 240,
+            HEXAGON_SIZE: 100,
+            HEPTAGON_SIZE: 64,
+            OCTAGON_SIZE: 135,
         };
 
         function clampVelocity(s) {
@@ -87,14 +188,7 @@
         const RECONCILE_LERP = 0.15;
         const RECONCILE_VEL_LERP = 0.08;
         const POST_FLAP_VEL_GRACE_MS = 150;
-
-        // Interpolation: how far behind real-time we render other players.
-        // 100ms is the classic value — smooth enough that snapshot jitter is hidden,
-        // recent enough that the lag isn't visually noticeable.
         const INTERP_DELAY_MS = 100;
-
-        // Drop snapshot history older than this. Plenty of room for finding
-        // bracketing pairs around render time.
         const INTERP_BUFFER_MAX_AGE_MS = 500;
 
         const COLORS = {
@@ -149,19 +243,18 @@
                 this.blockSprites = new Map();
                 this.coinSprites = new Map();
                 this.sideWallSprites = [];
+                this.pentagonSprites = new Map();
+                this.hexagonPairSprites = new Map();
+                this.heptagonSprites = new Map();
+                this.octagonSprites = new Map();
+                this.projectileSprites = new Map();
+
                 this.cameraTarget = null;
                 this.previousAlive = new Map();
                 this.gameOverOverlayShown = false;
                 this.myState = null;
                 this.myServerTarget = null;
-
-                // Interpolation state.
-                // For each remote player: a buffer of recent snapshots, ordered by tServer ascending.
-                // Each entry: { tServer, x, y, vx, vy, alive }.
                 this.interpBuffers = new Map();
-
-                // The latest server time we've seen across all snapshots. Render time
-                // is computed from this minus INTERP_DELAY_MS.
                 this.latestServerTime = 0;
             }
 
@@ -219,12 +312,14 @@
             generateTextures() {
                 const cPrimary = Phaser.Display.Color.HexStringToColor(COLORS.primary).color;
 
+                // Player
                 const pG = this.make.graphics();
                 pG.fillStyle(cPrimary);
                 pG.fillCircle(30, 30, 30);
                 pG.generateTexture('player', 60, 60);
                 pG.destroy();
 
+                // Coin
                 const cG = this.make.graphics();
                 cG.fillStyle(0x000000);
                 cG.lineStyle(2, 0xffffff);
@@ -234,23 +329,116 @@
                 cG.generateTexture('coin', COIN_SIZE, COIN_SIZE);
                 cG.destroy();
 
+                // Particle
                 const ptG = this.make.graphics();
                 ptG.fillStyle(0x000000);
                 ptG.fillRect(0, 0, 8, 8);
                 ptG.generateTexture('particle', 8, 8);
                 ptG.destroy();
 
+                // Block
                 const wG = this.make.graphics();
                 wG.fillStyle(cPrimary);
                 wG.fillRoundedRect(0, 0, BLOCK_RENDER_SIZE, BLOCK_RENDER_SIZE, 24);
                 wG.generateTexture('block', BLOCK_RENDER_SIZE, BLOCK_RENDER_SIZE);
                 wG.destroy();
 
+                // Spike
                 const sG = this.make.graphics();
                 sG.fillStyle(Phaser.Display.Color.HexStringToColor(COLORS.hazard).color);
                 sG.fillTriangle(64, 0, 0, 128, 128, 128);
                 sG.generateTexture('spike_single', 128, 128);
                 sG.destroy();
+
+                // Pentagon — black filled, no outline (matches single-player exactly).
+                const pentSize = SIM.PENTAGON_SIZE;
+                const pentG = this.make.graphics();
+                pentG.fillStyle(cPrimary);
+                const pentRadius = pentSize / 2;
+                const pentPoints = [];
+                for (let i = 0; i < 5; i++) {
+                    const angle = (i * 2 * Math.PI / 5) - Math.PI / 2;
+                    pentPoints.push({
+                        x: pentRadius + pentRadius * Math.cos(angle),
+                        y: pentRadius + pentRadius * Math.sin(angle),
+                    });
+                }
+                pentG.beginPath();
+                pentG.moveTo(pentPoints[0].x, pentPoints[0].y);
+                for (let i = 1; i < 5; i++) pentG.lineTo(pentPoints[i].x, pentPoints[i].y);
+                pentG.closePath();
+                pentG.fillPath();
+                pentG.generateTexture('pentagon', pentSize, pentSize);
+                pentG.destroy();
+
+                // Hexagon — black filled with 3px white outline.
+                const hexSize = SIM.HEXAGON_SIZE;
+                const hexG = this.make.graphics();
+                hexG.fillStyle(0x000000);
+                hexG.lineStyle(3, 0xffffff);
+                const hexRadius = hexSize / 2;
+                const hexPoints = [];
+                for (let i = 0; i < 6; i++) {
+                    const angle = (i * 2 * Math.PI / 6) - Math.PI / 2;
+                    hexPoints.push({
+                        x: hexRadius + hexRadius * 0.9 * Math.cos(angle),
+                        y: hexRadius + hexRadius * 0.9 * Math.sin(angle),
+                    });
+                }
+                hexG.beginPath();
+                hexG.moveTo(hexPoints[0].x, hexPoints[0].y);
+                for (let i = 1; i < 6; i++) hexG.lineTo(hexPoints[i].x, hexPoints[i].y);
+                hexG.closePath();
+                hexG.fillPath();
+                hexG.strokePath();
+                hexG.generateTexture('hexagon', hexSize, hexSize);
+                hexG.destroy();
+
+                // Heptagon — black filled with 2px white outline.
+                const heptSize = SIM.HEPTAGON_SIZE;
+                const heptG = this.make.graphics();
+                heptG.fillStyle(0x000000);
+                heptG.lineStyle(2, 0xffffff);
+                const heptRadius = heptSize / 2;
+                const heptPoints = [];
+                for (let i = 0; i < 7; i++) {
+                    const angle = (i * 2 * Math.PI / 7) - Math.PI / 2;
+                    heptPoints.push({
+                        x: heptRadius + heptRadius * 0.9 * Math.cos(angle),
+                        y: heptRadius + heptRadius * 0.9 * Math.sin(angle),
+                    });
+                }
+                heptG.beginPath();
+                heptG.moveTo(heptPoints[0].x, heptPoints[0].y);
+                for (let i = 1; i < 7; i++) heptG.lineTo(heptPoints[i].x, heptPoints[i].y);
+                heptG.closePath();
+                heptG.fillPath();
+                heptG.strokePath();
+                heptG.generateTexture('heptagon', heptSize, heptSize);
+                heptG.destroy();
+
+                // Octagon — black filled with 3px white outline, flat-top orientation.
+                const octSize = SIM.OCTAGON_SIZE;
+                const octG = this.make.graphics();
+                octG.fillStyle(0x000000);
+                octG.lineStyle(3, 0xffffff);
+                const octRadius = octSize / 2;
+                const octPoints = [];
+                for (let i = 0; i < 8; i++) {
+                    const angle = (i * 2 * Math.PI / 8) - Math.PI / 8;
+                    octPoints.push({
+                        x: octRadius + octRadius * 0.9 * Math.cos(angle),
+                        y: octRadius + octRadius * 0.9 * Math.sin(angle),
+                    });
+                }
+                octG.beginPath();
+                octG.moveTo(octPoints[0].x, octPoints[0].y);
+                for (let i = 1; i < 8; i++) octG.lineTo(octPoints[i].x, octPoints[i].y);
+                octG.closePath();
+                octG.fillPath();
+                octG.strokePath();
+                octG.generateTexture('octagon', octSize, octSize);
+                octG.destroy();
 
                 this.generateBackgroundTexture('bg_far',
                     {
@@ -346,6 +534,11 @@
                 for (const b of msg.blocks) this.spawnBlockSprite(b);
                 for (const c of msg.coins) this.spawnCoinSprite(c);
                 for (const seg of msg.sideWallSegments) this.spawnSideWallSegment(seg);
+                if (msg.pentagons) for (const p of msg.pentagons) this.spawnPentagonSprite(p);
+                if (msg.hexagonPairs) for (const h of msg.hexagonPairs) this.spawnHexagonPairSprite(h);
+                if (msg.heptagons) for (const h of msg.heptagons) this.spawnHeptagonSprite(h);
+                if (msg.octagons) for (const o of msg.octagons) this.spawnOctagonSprite(o);
+                if (msg.projectiles) for (const p of msg.projectiles) this.spawnProjectileSprite(p);
             }
 
             spawnBlockSprite(b) {
@@ -369,51 +562,67 @@
                 this.sideWallSprites.push(left, right);
             }
 
-            // Push a snapshot's data for a remote player into the interp buffer.
+            spawnPentagonSprite(p) {
+                const sprite = this.add.image(p.x, p.y, 'pentagon').setDepth(4);
+                sprite.setDisplaySize(SIM.PENTAGON_SIZE, SIM.PENTAGON_SIZE);
+                if (p.angle != null) sprite.angle = p.angle;
+                this.pentagonSprites.set(p.id, sprite);
+            }
+
+            spawnHexagonPairSprite(pair) {
+                const leftHex = this.add.image(pair.leftX, pair.y, 'hexagon').setDepth(4);
+                leftHex.setDisplaySize(SIM.HEXAGON_SIZE, SIM.HEXAGON_SIZE);
+                const rightHex = this.add.image(pair.rightX, pair.y, 'hexagon').setDepth(4);
+                rightHex.setDisplaySize(SIM.HEXAGON_SIZE, SIM.HEXAGON_SIZE);
+                const beamRect = this.add.rectangle(
+                    (pair.leftX + pair.rightX) / 2, pair.y,
+                    (pair.rightX - pair.leftX) - SIM.HEXAGON_SIZE, 25,
+                    0xffffff
+                ).setStrokeStyle(2, 0x000000).setDepth(6).setVisible(false);
+                const beamGfx = this.add.graphics().setDepth(7);
+                this.hexagonPairSprites.set(pair.id, {
+                    leftHex, rightHex, beamRect, beamGfx,
+                    leftX: pair.leftX, rightX: pair.rightX, y: pair.y,
+                });
+            }
+
+            spawnHeptagonSprite(h) {
+                const sprite = this.add.image(h.x, h.y, 'heptagon').setDepth(4);
+                sprite.setDisplaySize(SIM.HEPTAGON_SIZE, SIM.HEPTAGON_SIZE);
+                if (h.angle != null) sprite.angle = h.angle;
+                this.heptagonSprites.set(h.id, sprite);
+            }
+
+            spawnOctagonSprite(o) {
+                const sprite = this.add.image(o.x, o.y, 'octagon').setDepth(4);
+                sprite.setDisplaySize(SIM.OCTAGON_SIZE, SIM.OCTAGON_SIZE);
+                this.octagonSprites.set(o.id, sprite);
+            }
+
+            spawnProjectileSprite(p) {
+                const sprite = this.add.image(p.x, p.y, 'block').setDepth(3);
+                sprite.setDisplaySize(BLOCK_RENDER_SIZE, BLOCK_RENDER_SIZE);
+                if (p.scale && p.scale !== 1) sprite.setScale(p.scale);
+                this.projectileSprites.set(p.id, sprite);
+            }
+
             pushInterpSample(id, tServer, p) {
                 let buf = this.interpBuffers.get(id);
-                if (!buf) {
-                    buf = [];
-                    this.interpBuffers.set(id, buf);
-                }
-                buf.push({
-                    tServer,
-                    x: p.x, y: p.y,
-                    vx: p.vx, vy: p.vy,
-                    alive: p.alive,
-                });
-                // Trim old entries.
+                if (!buf) { buf = []; this.interpBuffers.set(id, buf); }
+                buf.push({ tServer, x: p.x, y: p.y, vx: p.vx, vy: p.vy, alive: p.alive });
                 const cutoff = tServer - INTERP_BUFFER_MAX_AGE_MS;
                 while (buf.length > 0 && buf[0].tServer < cutoff) buf.shift();
             }
 
-            // Look up an interpolated state for a remote player at the given render time.
-            // Returns null if no data is available yet.
             sampleInterpState(id, renderTime) {
                 const buf = this.interpBuffers.get(id);
                 if (!buf || buf.length === 0) return null;
-
-                // If render time is older than everything we have, return our oldest sample.
-                if (renderTime <= buf[0].tServer) {
-                    return buf[0];
-                }
-
-                // If render time is newer than newest sample, hold position at newest.
-                // (We could extrapolate using vx/vy, but holding looks cleaner when
-                // snapshots briefly stop arriving.)
-                if (renderTime >= buf[buf.length - 1].tServer) {
-                    return buf[buf.length - 1];
-                }
-
-                // Find the bracketing pair: the latest sample with tServer <= renderTime,
-                // and the next one. Walking from the end is typically faster since
-                // renderTime tends to be near the recent end.
+                if (renderTime <= buf[0].tServer) return buf[0];
+                if (renderTime >= buf[buf.length - 1].tServer) return buf[buf.length - 1];
                 for (let i = buf.length - 1; i > 0; i--) {
                     if (buf[i - 1].tServer <= renderTime && renderTime <= buf[i].tServer) {
-                        const a = buf[i - 1];
-                        const b = buf[i];
+                        const a = buf[i - 1], b = buf[i];
                         const span = b.tServer - a.tServer;
-                        // Fallback: if the two samples have the same timestamp, just use the older.
                         if (span <= 0) return a;
                         const t = (renderTime - a.tServer) / span;
                         return {
@@ -422,20 +631,14 @@
                             y: a.y + (b.y - a.y) * t,
                             vx: a.vx + (b.vx - a.vx) * t,
                             vy: a.vy + (b.vy - a.vy) * t,
-                            // Alive flag: take the older one's value until we cross to the
-                            // newer one. This means the death visual happens at exactly the
-                            // interpolated moment of the transition snapshot.
                             alive: t < 1.0 ? a.alive : b.alive,
                         };
                     }
                 }
-
-                // Shouldn't reach here, but just in case:
                 return buf[buf.length - 1];
             }
 
             applySnapshot(snap) {
-                // Track the latest server time across all snapshots received.
                 if (snap.tServer != null && snap.tServer > this.latestServerTime) {
                     this.latestServerTime = snap.tServer;
                 }
@@ -443,6 +646,12 @@
                 if (snap.newSideWallSegments) for (const seg of snap.newSideWallSegments) this.spawnSideWallSegment(seg);
                 if (snap.newBlocks) for (const b of snap.newBlocks) this.spawnBlockSprite(b);
                 if (snap.newCoins) for (const c of snap.newCoins) this.spawnCoinSprite(c);
+                if (snap.newPentagons) for (const p of snap.newPentagons) this.spawnPentagonSprite(p);
+                if (snap.newHexagonPairs) for (const h of snap.newHexagonPairs) this.spawnHexagonPairSprite(h);
+                if (snap.newHeptagons) for (const h of snap.newHeptagons) this.spawnHeptagonSprite(h);
+                if (snap.newOctagons) for (const o of snap.newOctagons) this.spawnOctagonSprite(o);
+                if (snap.newProjectiles) for (const p of snap.newProjectiles) this.spawnProjectileSprite(p);
+
                 if (snap.removedBlockIds) for (const id of snap.removedBlockIds) {
                     const s = this.blockSprites.get(id);
                     if (s) { s.destroy(); this.blockSprites.delete(id); }
@@ -451,10 +660,86 @@
                     const s = this.coinSprites.get(id);
                     if (s) { s.destroy(); this.coinSprites.delete(id); }
                 }
+                if (snap.removedPentagonIds) for (const id of snap.removedPentagonIds) {
+                    const s = this.pentagonSprites.get(id);
+                    if (s) { s.destroy(); this.pentagonSprites.delete(id); }
+                }
+                if (snap.removedHexagonPairIds) for (const id of snap.removedHexagonPairIds) {
+                    const refs = this.hexagonPairSprites.get(id);
+                    if (refs) {
+                        refs.leftHex.destroy(); refs.rightHex.destroy();
+                        refs.beamRect.destroy(); refs.beamGfx.destroy();
+                        this.hexagonPairSprites.delete(id);
+                    }
+                }
+                if (snap.removedHeptagonIds) for (const id of snap.removedHeptagonIds) {
+                    const s = this.heptagonSprites.get(id);
+                    if (s) { s.destroy(); this.heptagonSprites.delete(id); }
+                }
+                if (snap.removedOctagonIds) for (const id of snap.removedOctagonIds) {
+                    const s = this.octagonSprites.get(id);
+                    if (s) { s.destroy(); this.octagonSprites.delete(id); }
+                }
+                if (snap.removedProjectileIds) for (const id of snap.removedProjectileIds) {
+                    const s = this.projectileSprites.get(id);
+                    if (s) { s.destroy(); this.projectileSprites.delete(id); }
+                }
+
                 if (snap.blockScales) {
                     for (const id in snap.blockScales) {
                         const s = this.blockSprites.get(id);
                         if (s) s.setScale(snap.blockScales[id]);
+                    }
+                }
+
+                if (snap.pentagonStates) {
+                    for (const id in snap.pentagonStates) {
+                        const sprite = this.pentagonSprites.get(id);
+                        if (!sprite) continue;
+                        const st = snap.pentagonStates[id];
+                        sprite.x = st.x; sprite.y = st.y; sprite.angle = st.angle;
+                    }
+                }
+                if (snap.hexagonPairStates) {
+                    for (const id in snap.hexagonPairStates) {
+                        const refs = this.hexagonPairSprites.get(id);
+                        if (!refs) continue;
+                        const st = snap.hexagonPairStates[id];
+                        refs.leftHex.angle = st.leftAngle;
+                        refs.rightHex.angle = st.rightAngle;
+                        if (st.beamActive) {
+                            refs.beamRect.setVisible(true);
+                            const beamWidth = (refs.rightX - refs.leftX) - SIM.HEXAGON_SIZE;
+                            refs.beamRect.setSize(beamWidth, st.beamHeight);
+                        } else {
+                            refs.beamRect.setVisible(false);
+                            refs.beamGfx.clear();
+                        }
+                    }
+                }
+                if (snap.heptagonStates) {
+                    for (const id in snap.heptagonStates) {
+                        const sprite = this.heptagonSprites.get(id);
+                        if (!sprite) continue;
+                        const st = snap.heptagonStates[id];
+                        sprite.x = st.x; sprite.y = st.y; sprite.angle = st.angle;
+                    }
+                }
+                if (snap.octagonStates) {
+                    for (const id in snap.octagonStates) {
+                        const sprite = this.octagonSprites.get(id);
+                        if (!sprite) continue;
+                        const st = snap.octagonStates[id];
+                        sprite.setScale(st.pulseScale);
+                    }
+                }
+                if (snap.projectileStates) {
+                    for (const id in snap.projectileStates) {
+                        const sprite = this.projectileSprites.get(id);
+                        if (!sprite) continue;
+                        const st = snap.projectileStates[id];
+                        sprite.x = st.x; sprite.y = st.y;
+                        if (st.scale != null) sprite.setScale(st.scale);
                     }
                 }
 
@@ -476,7 +761,6 @@
                     }
 
                     if (isMe) {
-                        // My player: prediction + reconciliation, handled in update().
                         if (this.myState === null) {
                             this.myState = {
                                 x: p.x, y: p.y, vx: p.vx, vy: p.vy,
@@ -488,7 +772,7 @@
                         this.myServerTarget = {
                             x: p.x, y: p.y, vx: p.vx, vy: p.vy,
                             alive: p.alive, score: p.score,
-                            hasStarted: snap.hasStarted,
+                            hasStarted: snap.hasStarted, stunned: p.stunned,
                         };
                         if (this.myState.alive && !p.alive) this.myState.alive = false;
 
@@ -508,13 +792,10 @@
                         }
                         this.previousAlive.set(id, p.alive);
                     } else {
-                        // Remote player: push to interp buffer. Sprite positioning happens
-                        // every frame in update() using the buffered samples.
                         this.pushInterpSample(id, snap.tServer || 0, p);
                     }
                 }
 
-                // Players removed from the snapshot: clean up.
                 for (const [id, v] of this.playerVisuals) {
                     if (!seenIds.has(id)) {
                         this.destroyPlayerVisual(v);
@@ -636,8 +917,12 @@
 
             applyFlapToMyState() {
                 if (!this.myState || !this.myState.alive) return false;
+                if (this.myServerTarget && this.myServerTarget.stunned) return false;
                 const now = performance.now();
                 if (now - this.myState.lastFlapTime < SIM.FLAP_COOLDOWN_MS) return false;
+
+                // First flap of the game also kicks off music.
+                if (!musicStarted) startMusic();
 
                 this.myState.vy = -SIM.JUMP_FORCE;
                 this.myState.vx = SIM.HORIZONTAL_SPEED * this.myState.nextFlapDirection;
@@ -654,7 +939,6 @@
                 const s = this.myState;
                 s.vy += SIM.GRAVITY * deltaSeconds;
                 if (s.vy > SIM.MAX_FALL_SPEED) s.vy = SIM.MAX_FALL_SPEED;
-
                 s.x += s.vx * deltaSeconds;
                 s.y += s.vy * deltaSeconds;
 
@@ -677,7 +961,6 @@
                 const t = this.myServerTarget;
                 this.myState.x += (t.x - this.myState.x) * RECONCILE_LERP;
                 this.myState.y += (t.y - this.myState.y) * RECONCILE_LERP;
-
                 const now = performance.now();
                 const sinceLastFlap = now - this.myState.lastFlapTime;
                 if (sinceLastFlap > POST_FLAP_VEL_GRACE_MS) {
@@ -686,44 +969,75 @@
                 }
             }
 
-            // Position remote players using their interpolation buffer.
-            // Called every frame in update().
             updateRemotePlayerVisuals() {
                 const renderTime = this.latestServerTime - INTERP_DELAY_MS;
-
                 for (const [id, v] of this.playerVisuals) {
                     if (id === mySessionId) continue;
-
                     const sample = this.sampleInterpState(id, renderTime);
                     if (!sample) continue;
-
                     v.sprite.x = sample.x;
                     v.sprite.y = sample.y;
                     v.eyesContainer.x = sample.x;
                     v.eyesContainer.y = sample.y;
 
-                    // Detect a flap (vx sign flip) using the interpolated vx so the
-                    // squish-stretch fires at the visually correct moment, not when
-                    // the snapshot first arrived.
                     const prevVx = v.lastVx;
                     if (Math.abs(sample.vx) > 50 && Math.sign(sample.vx) !== Math.sign(prevVx) && sample.alive) {
                         this.playFlapJuice(v);
                     }
                     v.lastVx = sample.vx;
 
-                    // Eye direction follows the interpolated velocity.
                     v.targetEye.x = Phaser.Math.Clamp(sample.vx / 20, -6, 6);
                     v.targetEye.y = Phaser.Math.Clamp(sample.vy / 40, -4, 4);
                     v.targetPupil.x = v.targetEye.x * 0.5;
                     v.targetPupil.y = v.targetEye.y * 0.5;
 
-                    // Death transition for remote players.
                     const wasAlive = this.previousAlive.get(id);
                     if (wasAlive !== false && sample.alive === false) {
                         v.sprite.setTint(0xff0000);
                         v.eyesContainer.setVisible(false);
                     }
                     this.previousAlive.set(id, sample.alive);
+                }
+            }
+
+            drawBeamDashes(refs, time) {
+                const gfx = refs.beamGfx;
+                gfx.clear();
+                if (!refs.beamRect.visible) return;
+
+                const leftX = refs.leftX + SIM.HEXAGON_SIZE / 2;
+                const rightX = refs.rightX - SIM.HEXAGON_SIZE / 2;
+                const centerX = (leftX + rightX) / 2;
+                const centerY = refs.y;
+
+                gfx.lineStyle(2, 0x888888, 0.5);
+                const speed = 0.4;
+                const dashLength = 20;
+                const dashSpacing = 60;
+                const lanes = [-6, 0, 6];
+
+                for (let laneIdx = 0; laneIdx < lanes.length; laneIdx++) {
+                    const yPos = centerY + lanes[laneIdx];
+                    const laneTimeOffset = laneIdx * 200;
+                    const progress = ((time + laneTimeOffset) * speed) % dashSpacing;
+                    for (let d = 0; d < 6; d++) {
+                        const dashX = leftX + progress + (d * dashSpacing);
+                        if (dashX > leftX && dashX + dashLength < centerX) {
+                            gfx.beginPath();
+                            gfx.moveTo(dashX, yPos);
+                            gfx.lineTo(dashX + dashLength, yPos);
+                            gfx.strokePath();
+                        }
+                    }
+                    for (let d = 0; d < 6; d++) {
+                        const dashX = rightX - progress - (d * dashSpacing);
+                        if (dashX < rightX && dashX - dashLength > centerX) {
+                            gfx.beginPath();
+                            gfx.moveTo(dashX, yPos);
+                            gfx.lineTo(dashX - dashLength, yPos);
+                            gfx.strokePath();
+                        }
+                    }
                 }
             }
 
@@ -766,10 +1080,12 @@
                     }
                 }
 
-                // Position remote players via interpolation.
                 this.updateRemotePlayerVisuals();
 
-                // Eye smoothing for ALL players (mine + remotes).
+                for (const refs of this.hexagonPairSprites.values()) {
+                    this.drawBeamDashes(refs, time);
+                }
+
                 for (const v of this.playerVisuals.values()) {
                     v.currentEye.x += (v.targetEye.x - v.currentEye.x) * 0.15;
                     v.currentEye.y += (v.targetEye.y - v.currentEye.y) * 0.15;
