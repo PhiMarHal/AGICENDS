@@ -149,8 +149,6 @@
         const BLOCK_RENDER_SIZE = 90;
         const COIN_SIZE = 45;
         const PLAYER_BASE_SCALE = 1.2;
-        // Camera bound: must accommodate any plausible playtime. 10M pixels at
-        // ~600 px/s typical rise = ~16,667 seconds = ~4.6 hours of play. Plenty.
         const WORLD_HEIGHT_UP = 10000000;
 
         const SIM = {
@@ -158,7 +156,7 @@
             JUMP_FORCE: 650,
             HORIZONTAL_SPEED: 400,
             MAX_FALL_SPEED: 800,
-            MAX_VX: 800, MAX_VY_UP: 2400, MAX_VY_DOWN: 2400,
+            MAX_VX: 800, MAX_VY_UP: 2000, MAX_VY_DOWN: 2000,
             WALL_THICKNESS: 35,
             FLAP_COOLDOWN_MS: 200,
             START_Y_OFFSET: 200,
@@ -242,11 +240,6 @@
                 this.octagonSprites = new Map();
                 this.projectileSprites = new Map();
 
-                // Per-entity client-side state for fast-moving polygon obstacles.
-                // Each entry holds the latest server position + velocity, plus the local
-                // wall-clock time when that snapshot was applied. Used in update() to
-                // dead-reckon between snapshots so movement looks smooth.
-                // Format: id -> { x, y, vx, vy, angle, lastUpdateClientMs, ...extras }
                 this.heptagonInterp = new Map();
                 this.pentagonInterp = new Map();
                 this.projectileInterp = new Map();
@@ -347,7 +340,6 @@
                 sG.generateTexture('spike_single', 128, 128);
                 sG.destroy();
 
-                // Pentagon — black filled, no outline.
                 const pentSize = SIM.PENTAGON_SIZE;
                 const pentG = this.make.graphics();
                 pentG.fillStyle(cPrimary);
@@ -368,7 +360,6 @@
                 pentG.generateTexture('pentagon', pentSize, pentSize);
                 pentG.destroy();
 
-                // Hexagon.
                 const hexSize = SIM.HEXAGON_SIZE;
                 const hexG = this.make.graphics();
                 hexG.fillStyle(0x000000);
@@ -391,7 +382,6 @@
                 hexG.generateTexture('hexagon', hexSize, hexSize);
                 hexG.destroy();
 
-                // Heptagon.
                 const heptSize = SIM.HEPTAGON_SIZE;
                 const heptG = this.make.graphics();
                 heptG.fillStyle(0x000000);
@@ -414,7 +404,6 @@
                 heptG.generateTexture('heptagon', heptSize, heptSize);
                 heptG.destroy();
 
-                // Octagon.
                 const octSize = SIM.OCTAGON_SIZE;
                 const octG = this.make.graphics();
                 octG.fillStyle(0x000000);
@@ -564,7 +553,6 @@
                 sprite.setDisplaySize(SIM.PENTAGON_SIZE, SIM.PENTAGON_SIZE);
                 if (p.angle != null) sprite.angle = p.angle;
                 this.pentagonSprites.set(p.id, sprite);
-                // Initialize interp record. Pentagons fall straight down at moveSpeed.
                 this.pentagonInterp.set(p.id, {
                     x: p.x, y: p.y, vy: 80, angle: p.angle || 0,
                     lastUpdateClientMs: performance.now(),
@@ -708,9 +696,6 @@
                     }
                 }
 
-                // Update interp records for fast-moving polygon obstacles. We don't
-                // immediately move the sprite — that happens in update() each frame
-                // using vx/vy to fill the gaps between snapshots.
                 const nowClient = performance.now();
                 if (snap.pentagonStates) {
                     for (const id in snap.pentagonStates) {
@@ -749,8 +734,6 @@
                     }
                 }
 
-                // Hexagon pair states: still applied directly per-tick (they don't move
-                // in space, only their angles and beam state change).
                 if (snap.hexagonPairStates) {
                     for (const id in snap.hexagonPairStates) {
                         const refs = this.hexagonPairSprites.get(id);
@@ -769,7 +752,6 @@
                     }
                 }
 
-                // Octagons: pulse scale only.
                 if (snap.octagonStates) {
                     for (const id in snap.octagonStates) {
                         const sprite = this.octagonSprites.get(id);
@@ -1035,10 +1017,6 @@
                 }
             }
 
-            // Per-frame extrapolation for fast-moving polygon obstacles.
-            // We compute a render-time "elapsed since last server snapshot" and
-            // dead-reckon the sprite position from snapshot position + (velocity * elapsed).
-            // Cap the extrapolation to ~2 frames worth so glitches can't push the sprite far.
             updatePolygonExtrapolation() {
                 const nowClient = performance.now();
                 const maxExtrapolateMs = 50;
@@ -1057,7 +1035,7 @@
                     if (!rec) continue;
                     const dt = Math.min(nowClient - rec.lastUpdateClientMs, maxExtrapolateMs) / 1000;
                     sprite.x = rec.x;
-                    sprite.y = rec.y + 80 * dt; // pentagons fall at 80 px/s
+                    sprite.y = rec.y + 80 * dt;
                     sprite.angle = rec.angle;
                 }
 

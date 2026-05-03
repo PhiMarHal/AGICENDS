@@ -24,7 +24,7 @@ const SIM = {
     FLAP_COOLDOWN_MS: 200,
 
     HAZARD_BASE_SPEED: 120,
-    HAZARD_INCREASE: 20,    // doubled from 10 — per-cycle increase to spike speed
+    HAZARD_INCREASE: 20,
     SPIKE_INITIAL_OFFSET: 50,
 
     START_Y_OFFSET: 200,
@@ -42,15 +42,14 @@ const SIM = {
 
     STUN_DURATION_MS: 400,
 
-    // Reduced from 2.0 to 1.5 to prevent tunneling through obstacles. The
-    // post-bounce velocity is also explicitly clamped tighter for stun hits to
-    // keep per-tick travel below ~obstacle-thickness/tick.
-    STUN_KNOCKBACK_BOOST: 1.5,
-    STUN_MAX_VX: 800,    // tighter cap right after a stun-bounce
-    STUN_MAX_VY: 2000,   // tighter cap right after a stun-bounce
+    // Knockback boost for beam/heptagon hits. The global MAX_VX/MAX_VY caps
+    // prevent runaway tunneling through walls and blocks. Beams (~25-30px) can
+    // still be clipped by a savvy player at full vertical velocity — left as a
+    // skill expression opportunity.
+    STUN_KNOCKBACK_BOOST: 2.0,
 
     PENTAGON: {
-        startInterval: 15,
+        startInterval: 5,
         spawnRate: [2, 4],
         size: 240,
         moveSpeed: 80,
@@ -58,8 +57,8 @@ const SIM = {
         rotationSpeed: 0.001,
     },
     HEXAGON: {
-        startInterval: 1,
-        spawnRate: [8, 16],
+        startInterval: 9,
+        spawnRate: [2, 4],
         size: 100,
         fireDuration: 2000,
         rechargeDuration: 1000,
@@ -67,7 +66,7 @@ const SIM = {
         beamHeight: 25,
     },
     HEPTAGON: {
-        startInterval: 15,
+        startInterval: 13,
         spawnRate: [2, 4],
         size: 64,
         bounceSpeed: 400,
@@ -75,7 +74,7 @@ const SIM = {
         swarmCount: 7,
     },
     OCTAGON: {
-        startInterval: 15,
+        startInterval: 17,
         spawnRate: [4, 8],
         size: 135,
         shootInterval: 2000,
@@ -89,15 +88,6 @@ function clampVelocity(p) {
     if (p.vx < -SIM.MAX_VX) p.vx = -SIM.MAX_VX;
     if (p.vy > SIM.MAX_VY_DOWN) p.vy = SIM.MAX_VY_DOWN;
     if (p.vy < -SIM.MAX_VY_UP) p.vy = -SIM.MAX_VY_UP;
-}
-
-// Tighter clamp specifically for stun-knockback hits. Limits per-frame travel
-// to roughly half the smallest obstacle thickness, eliminating tunneling.
-function clampStunVelocity(p) {
-    if (p.vx > SIM.STUN_MAX_VX) p.vx = SIM.STUN_MAX_VX;
-    if (p.vx < -SIM.STUN_MAX_VX) p.vx = -SIM.STUN_MAX_VX;
-    if (p.vy > SIM.STUN_MAX_VY) p.vy = SIM.STUN_MAX_VY;
-    if (p.vy < -SIM.STUN_MAX_VY) p.vy = -SIM.STUN_MAX_VY;
 }
 
 function randBetween(min, max) { return Math.random() * (max - min) + min; }
@@ -503,14 +493,11 @@ function resolveCircleBounce(p, cx, cy, cr, eventsArr, stunBoost = false, match 
             p.vx -= (1 + bounce) * vDotN * nx;
             p.vy -= (1 + bounce) * vDotN * ny;
             if (stunBoost) {
-                // Reduced multiplier and tighter clamp prevent tunneling on knockback.
                 p.vx *= SIM.STUN_KNOCKBACK_BOOST;
                 p.vy *= SIM.STUN_KNOCKBACK_BOOST;
-                clampStunVelocity(p);
                 if (match) p.lastStunTime = match.elapsedMs;
-            } else {
-                clampVelocity(p);
             }
+            clampVelocity(p);
         }
         eventsArr.push({ type: 'hit', x: p.x, y: p.y });
         return true;
@@ -548,14 +535,12 @@ function step(match, deltaSeconds) {
     const highY = highestPlayerY(match);
     generateChunks(match.world, highY - SIM.CANVAS_HEIGHT * 1.5, match.elapsedMs);
 
-    // Pentagons.
     for (const pent of w.pentagons.values()) {
         pent.y += pent.vy * deltaSeconds;
         const elapsed = match.elapsedMs - pent.spawnTime;
         pent.angle = Math.sin(elapsed * SIM.PENTAGON.rotationSpeed) * SIM.PENTAGON.rotationRange;
     }
 
-    // Hexagon pairs.
     const totalCycle = SIM.HEXAGON.rechargeDuration + SIM.HEXAGON.fireDuration;
     for (const pair of w.hexagonPairs.values()) {
         const cycleTime = (match.elapsedMs - pair.spawnTime) % totalCycle;
@@ -580,7 +565,6 @@ function step(match, deltaSeconds) {
         }
     }
 
-    // Heptagons.
     for (const h of w.heptagons.values()) {
         h.x += h.vx * deltaSeconds;
         h.y += h.vy * deltaSeconds;
@@ -594,7 +578,6 @@ function step(match, deltaSeconds) {
         h.angle += 120 * deltaSeconds;
     }
 
-    // Octagons.
     for (const o of w.octagons.values()) {
         if (o.pulseTimer > 0) {
             o.pulseTimer -= deltaSeconds * 1000;
@@ -629,13 +612,11 @@ function step(match, deltaSeconds) {
         }
     }
 
-    // Projectiles.
     for (const proj of w.projectiles.values()) {
         proj.x += proj.vx * deltaSeconds;
         proj.y += proj.vy * deltaSeconds;
     }
 
-    // Per-player physics.
     for (const p of match.players.values()) {
         if (!p.alive) continue;
 
@@ -705,7 +686,7 @@ function step(match, deltaSeconds) {
             resolveCircleBounce(p, pair.rightX, pair.y, SIM.HEXAGON.size / 2, match.eventsThisTick);
         }
 
-        // Hexagon beam: stuns + reduced knockback (not the old 2x boost).
+        // Hexagon beam: stuns + knockback boost.
         for (const pair of w.hexagonPairs.values()) {
             if (!pair.beamActive) continue;
             const halfBeam = pair.beamHeight / 2;
@@ -728,10 +709,9 @@ function step(match, deltaSeconds) {
                 if (vDotN < 0) {
                     p.vx -= (1 + SIM.PLAYER_BOUNCE) * vDotN * nx;
                     p.vy -= (1 + SIM.PLAYER_BOUNCE) * vDotN * ny;
-                    // Reduced knockback boost + tighter clamp prevent tunneling.
                     p.vx *= SIM.STUN_KNOCKBACK_BOOST;
                     p.vy *= SIM.STUN_KNOCKBACK_BOOST;
-                    clampStunVelocity(p);
+                    clampVelocity(p);
                     p.lastStunTime = match.elapsedMs;
                 }
                 match.eventsThisTick.push({ type: 'hit', x: p.x, y: p.y });
