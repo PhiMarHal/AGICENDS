@@ -57,8 +57,8 @@ const SIM = {
         rotationSpeed: 0.001,
     },
     HEXAGON: {
-        startInterval: 9,
-        spawnRate: [2, 4],
+        startInterval: 1,
+        spawnRate: [8, 8],
         size: 100,
         fireDuration: 2000,
         rechargeDuration: 1000,
@@ -561,7 +561,7 @@ function step(match, deltaSeconds) {
             pair.rightAngle = -720 - fireProgress * 180;
             pair.beamActive = true;
             const pulseProgress = fireProgress * 4 * Math.PI * 2;
-            pair.beamHeight = 25 + Math.sin(pulseProgress) * 5;
+            pair.beamHeight = 36 + Math.sin(pulseProgress) * 5;
         }
     }
 
