@@ -15,8 +15,7 @@ const SIM = {
     MAX_FALL_SPEED: 800,
 
     MAX_VX: 800,
-    MAX_VY_UP: 2000,
-    MAX_VY_DOWN: 2000,
+    MAX_VY: 2000,
 
     WALL_THICKNESS: 35,
     OBSTACLE_SIZE: 45,
@@ -41,11 +40,6 @@ const SIM = {
     BASE_BLOCK_RATE: 2,
 
     STUN_DURATION_MS: 400,
-
-    // Knockback boost for beam/heptagon hits. The global MAX_VX/MAX_VY caps
-    // prevent runaway tunneling through walls and blocks. Beams (~25-30px) can
-    // still be clipped by a savvy player at full vertical velocity — left as a
-    // skill expression opportunity.
     STUN_KNOCKBACK_BOOST: 2.0,
 
     PENTAGON: {
@@ -57,13 +51,15 @@ const SIM = {
         rotationSpeed: 0.001,
     },
     HEXAGON: {
-        startInterval: 1,
-        spawnRate: [8, 8],
+        startInterval: 9,
+        spawnRate: [2, 4],
         size: 100,
         fireDuration: 2000,
         rechargeDuration: 1000,
         spinDuration: 500,
-        beamHeight: 25,
+        // Beam height now actually drives the rendering. Pulse adds ±5 to this base.
+        beamHeight: 36,
+        beamPulseAmplitude: 5,
     },
     HEPTAGON: {
         startInterval: 13,
@@ -86,8 +82,8 @@ const SIM = {
 function clampVelocity(p) {
     if (p.vx > SIM.MAX_VX) p.vx = SIM.MAX_VX;
     if (p.vx < -SIM.MAX_VX) p.vx = -SIM.MAX_VX;
-    if (p.vy > SIM.MAX_VY_DOWN) p.vy = SIM.MAX_VY_DOWN;
-    if (p.vy < -SIM.MAX_VY_UP) p.vy = -SIM.MAX_VY_UP;
+    if (p.vy > SIM.MAX_VY) p.vy = SIM.MAX_VY;
+    if (p.vy < -SIM.MAX_VY) p.vy = -SIM.MAX_VY;
 }
 
 function randBetween(min, max) { return Math.random() * (max - min) + min; }
@@ -560,8 +556,9 @@ function step(match, deltaSeconds) {
             pair.leftAngle = 720 + fireProgress * 180;
             pair.rightAngle = -720 - fireProgress * 180;
             pair.beamActive = true;
+            // Beam height: configured base + sinusoidal pulse around it.
             const pulseProgress = fireProgress * 4 * Math.PI * 2;
-            pair.beamHeight = 36 + Math.sin(pulseProgress) * 5;
+            pair.beamHeight = SIM.HEXAGON.beamHeight + Math.sin(pulseProgress) * SIM.HEXAGON.beamPulseAmplitude;
         }
     }
 
@@ -686,7 +683,6 @@ function step(match, deltaSeconds) {
             resolveCircleBounce(p, pair.rightX, pair.y, SIM.HEXAGON.size / 2, match.eventsThisTick);
         }
 
-        // Hexagon beam: stuns + knockback boost.
         for (const pair of w.hexagonPairs.values()) {
             if (!pair.beamActive) continue;
             const halfBeam = pair.beamHeight / 2;

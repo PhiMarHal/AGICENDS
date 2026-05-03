@@ -156,7 +156,7 @@
             JUMP_FORCE: 650,
             HORIZONTAL_SPEED: 400,
             MAX_FALL_SPEED: 800,
-            MAX_VX: 800, MAX_VY_UP: 2000, MAX_VY_DOWN: 2000,
+            MAX_VX: 800, MAX_VY: 2000,
             WALL_THICKNESS: 35,
             FLAP_COOLDOWN_MS: 200,
             START_Y_OFFSET: 200,
@@ -172,15 +172,25 @@
         function clampVelocity(s) {
             if (s.vx > SIM.MAX_VX) s.vx = SIM.MAX_VX;
             if (s.vx < -SIM.MAX_VX) s.vx = -SIM.MAX_VX;
-            if (s.vy > SIM.MAX_VY_DOWN) s.vy = SIM.MAX_VY_DOWN;
-            if (s.vy < -SIM.MAX_VY_UP) s.vy = -SIM.MAX_VY_UP;
+            if (s.vy > SIM.MAX_VY) s.vy = SIM.MAX_VY;
+            if (s.vy < -SIM.MAX_VY) s.vy = -SIM.MAX_VY;
         }
 
+        // Reverted to Round-1-pre-prediction-tweak reconciliation:
+        // simple lerp every frame for both position and velocity, with a
+        // post-flap velocity grace window. No deadband, no snap.
         const RECONCILE_LERP = 0.15;
         const RECONCILE_VEL_LERP = 0.08;
         const POST_FLAP_VEL_GRACE_MS = 150;
+
         const INTERP_DELAY_MS = 100;
         const INTERP_BUFFER_MAX_AGE_MS = 500;
+
+        // Proximity indicators: off-screen targets get a marker on the screen edge.
+        const PROXIMITY_TRIANGLE_SIZE = 22;
+        const PROXIMITY_EDGE_MARGIN = 22;          // distance from screen edge to triangle tip
+        const PROXIMITY_TEXT_LINE_HEIGHT = 18;
+        const PROXIMITY_X_CLAMP_MARGIN = 50;       // keep indicators away from canvas left/right edges
 
         const COLORS = {
             background: '#ffffff',
@@ -251,6 +261,16 @@
                 this.myServerTarget = null;
                 this.interpBuffers = new Map();
                 this.latestServerTime = 0;
+
+                // Latest player snapshot data (kept around for proximity indicator
+                // calculations — separate from interp buffers because we want the
+                // most recent known position, not a render-delayed sample).
+                this.latestPlayerData = new Map();  // id -> { x, y, alive }
+                this.latestSpikeY = null;
+
+                // Pool of proximity indicators. Each entry holds a triangle and two
+                // text objects. Reused across frames; hidden when not in use.
+                this.proximityIndicatorPool = [];
             }
 
             create() {
@@ -426,6 +446,18 @@
                 octG.generateTexture('octagon', octSize, octSize);
                 octG.destroy();
 
+                // Up-pointing triangle for proximity indicator (white fill, black outline).
+                // Texture is 22x22 with the triangle inscribed. The matching down-pointing
+                // sprite is the same texture flipped via setRotation(180deg).
+                const tSize = PROXIMITY_TRIANGLE_SIZE;
+                const tG = this.make.graphics();
+                tG.fillStyle(0xffffff);
+                tG.lineStyle(2, 0x000000);
+                tG.fillTriangle(tSize / 2, 0, 0, tSize, tSize, tSize);
+                tG.strokeTriangle(tSize / 2, 0, 0, tSize, tSize, tSize);
+                tG.generateTexture('proximity_triangle', tSize, tSize);
+                tG.destroy();
+
                 this.generateBackgroundTexture('bg_far',
                     {
                         fill: '#d0d0d0', centerBandW: 240, towerW: 120, towerDist: 360,
@@ -477,6 +509,141 @@
                 }
                 ctx.putImageData(imgData, 0, 0);
                 this.textures.addCanvas(key, canvas);
+            }
+
+            // === Proximity indicator pool management ===
+            acquireProximityIndicator() {
+                for (const ind of this.proximityIndicatorPool) {
+                    if (!ind.inUse) {
+                        ind.inUse = true;
+                        ind.triangle.setVisible(true);
+                        ind.line1.setVisible(true);
+                        ind.line2.setVisible(true);
+                        return ind;
+                    }
+                }
+                const triangle = this.add.image(0, 0, 'proximity_triangle')
+                    .setScrollFactor(0).setDepth(150).setOrigin(0.5, 0.5);
+                const textStyle = {
+                    fontFamily: 'Arial', fontSize: '14px', fontStyle: 'bold',
+                    color: '#000000', stroke: '#ffffff', strokeThickness: 3,
+                };
+                const line1 = this.add.text(0, 0, '', textStyle)
+                    .setOrigin(0.5, 0.5).setScrollFactor(0).setDepth(150);
+                const line2 = this.add.text(0, 0, '', textStyle)
+                    .setOrigin(0.5, 0.5).setScrollFactor(0).setDepth(150);
+                const ind = { inUse: true, triangle, line1, line2 };
+                this.proximityIndicatorPool.push(ind);
+                return ind;
+            }
+
+            releaseUnusedProximityIndicators() {
+                for (const ind of this.proximityIndicatorPool) {
+                    if (!ind.inUse) {
+                        ind.triangle.setVisible(false);
+                        ind.line1.setVisible(false);
+                        ind.line2.setVisible(false);
+                    }
+                }
+            }
+
+            // Draw a single proximity indicator. `pointsUp` true means the triangle
+            // is at the top of the screen pointing up (target is above the player);
+            // false means triangle at bottom pointing down (target is below).
+            placeProximityIndicator(ind, screenX, pointsUp, line1Text, line2Text) {
+                // Clamp X so the indicator stays away from canvas edges.
+                const clampedX = Math.max(PROXIMITY_X_CLAMP_MARGIN,
+                    Math.min(CANVAS_WIDTH - PROXIMITY_X_CLAMP_MARGIN, screenX));
+
+                if (pointsUp) {
+                    // Triangle near top of screen pointing up.
+                    // Layout below the triangle: line1 (distance), line2 (name).
+                    const triY = PROXIMITY_EDGE_MARGIN;
+                    ind.triangle.x = clampedX;
+                    ind.triangle.y = triY;
+                    ind.triangle.angle = 0;
+                    ind.line1.x = clampedX;
+                    ind.line1.y = triY + PROXIMITY_TRIANGLE_SIZE / 2 + PROXIMITY_TEXT_LINE_HEIGHT;
+                    ind.line2.x = clampedX;
+                    ind.line2.y = ind.line1.y + PROXIMITY_TEXT_LINE_HEIGHT;
+                } else {
+                    // Triangle near bottom of screen pointing down.
+                    // Layout above the triangle: line1 (name), line2 (distance).
+                    const triY = CANVAS_HEIGHT - PROXIMITY_EDGE_MARGIN;
+                    ind.triangle.x = clampedX;
+                    ind.triangle.y = triY;
+                    ind.triangle.angle = 180;
+                    ind.line2.x = clampedX;
+                    ind.line2.y = triY - PROXIMITY_TRIANGLE_SIZE / 2 - PROXIMITY_TEXT_LINE_HEIGHT;
+                    ind.line1.x = clampedX;
+                    ind.line1.y = ind.line2.y - PROXIMITY_TEXT_LINE_HEIGHT;
+                }
+
+                ind.line1.setText(line1Text);
+                ind.line2.setText(line2Text);
+            }
+
+            // Camera-visible Y range. Used to decide what's off-screen.
+            visibleYRange() {
+                const cam = this.cameras.main;
+                return { top: cam.scrollY, bottom: cam.scrollY + cam.height };
+            }
+
+            // Convert world X to screen X (camera doesn't scroll horizontally so
+            // this is just the world X minus any camera horizontal offset, which
+            // is always 0 in our setup).
+            worldToScreenX(worldX) {
+                return worldX - this.cameras.main.scrollX;
+            }
+
+            updateProximityIndicators() {
+                // Mark all indicators as available; we'll claim what we need below.
+                for (const ind of this.proximityIndicatorPool) ind.inUse = false;
+
+                if (!this.myState) {
+                    this.releaseUnusedProximityIndicators();
+                    return;
+                }
+
+                const { top, bottom } = this.visibleYRange();
+                const myY = this.myState.y;
+
+                // 1. Player indicators — for every other alive player whose Y is
+                //    outside the visible range.
+                for (const [id, p] of this.latestPlayerData) {
+                    if (id === mySessionId) continue;
+                    if (!p.alive) continue;
+
+                    let pointsUp;
+                    if (p.y < top) pointsUp = true;          // above visible
+                    else if (p.y > bottom) pointsUp = false; // below visible
+                    else continue;                            // on-screen, no indicator
+
+                    const ind = this.acquireProximityIndicator();
+                    const screenX = this.worldToScreenX(p.x);
+                    const distM = Math.round(Math.abs(p.y - myY));
+                    // line1/line2 semantics:
+                    //   pointsUp=true (above):  line1 = distance, line2 = name
+                    //   pointsUp=false (below): line1 = name,     line2 = distance
+                    const distText = distM + 'm';
+                    const nameText = id;
+                    if (pointsUp) {
+                        this.placeProximityIndicator(ind, screenX, true, distText, nameText);
+                    } else {
+                        this.placeProximityIndicator(ind, screenX, false, nameText, distText);
+                    }
+                }
+
+                // 2. Spike indicator — when the spike line is below the visible
+                //    range (which is the only case in normal play).
+                if (this.latestSpikeY != null && this.latestSpikeY > bottom) {
+                    const ind = this.acquireProximityIndicator();
+                    const screenX = CANVAS_WIDTH / 2;
+                    const distM = Math.round(Math.abs(this.latestSpikeY - myY));
+                    this.placeProximityIndicator(ind, screenX, false, 'SPIKES', distM + 'm');
+                }
+
+                this.releaseUnusedProximityIndicators();
             }
 
             createPlayerVisual(sessionId, isMe) {
@@ -761,12 +928,19 @@
                     }
                 }
 
-                if (snap.spikeY != null) this.spikeContainer.y = snap.spikeY;
+                if (snap.spikeY != null) {
+                    this.spikeContainer.y = snap.spikeY;
+                    this.latestSpikeY = snap.spikeY;
+                }
 
                 const seenIds = new Set();
                 for (const id in snap.players) {
                     seenIds.add(id);
                     const p = snap.players[id];
+
+                    // Latest authoritative player data, used for proximity indicators.
+                    this.latestPlayerData.set(id, { x: p.x, y: p.y, alive: p.alive });
+
                     const isMe = (id === mySessionId);
                     let v = this.playerVisuals.get(id);
                     if (!v) {
@@ -819,6 +993,7 @@
                         this.destroyPlayerVisual(v);
                         this.playerVisuals.delete(id);
                         this.interpBuffers.delete(id);
+                        this.latestPlayerData.delete(id);
                         if (this.cameraTarget === v.sprite) {
                             this.cameraTarget = null;
                             this.cameras.main.stopFollow();
@@ -1130,6 +1305,7 @@
 
                 this.updateRemotePlayerVisuals();
                 this.updatePolygonExtrapolation();
+                this.updateProximityIndicators();
 
                 for (const refs of this.hexagonPairSprites.values()) {
                     this.drawBeamDashes(refs, time);
