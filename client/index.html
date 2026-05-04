@@ -169,6 +169,9 @@
             OCTAGON_SIZE: 135,
         };
 
+        const ROUND_RUNNING = 'running';
+        const ROUND_OVER = 'round_over';
+
         function clampVelocity(s) {
             if (s.vx > SIM.MAX_VX) s.vx = SIM.MAX_VX;
             if (s.vx < -SIM.MAX_VX) s.vx = -SIM.MAX_VX;
@@ -176,9 +179,6 @@
             if (s.vy < -SIM.MAX_VY) s.vy = -SIM.MAX_VY;
         }
 
-        // Reverted to Round-1-pre-prediction-tweak reconciliation:
-        // simple lerp every frame for both position and velocity, with a
-        // post-flap velocity grace window. No deadband, no snap.
         const RECONCILE_LERP = 0.15;
         const RECONCILE_VEL_LERP = 0.08;
         const POST_FLAP_VEL_GRACE_MS = 150;
@@ -186,11 +186,10 @@
         const INTERP_DELAY_MS = 100;
         const INTERP_BUFFER_MAX_AGE_MS = 500;
 
-        // Proximity indicators: off-screen targets get a marker on the screen edge.
         const PROXIMITY_TRIANGLE_SIZE = 22;
-        const PROXIMITY_EDGE_MARGIN = 22;          // distance from screen edge to triangle tip
+        const PROXIMITY_EDGE_MARGIN = 22;
         const PROXIMITY_TEXT_LINE_HEIGHT = 18;
-        const PROXIMITY_X_CLAMP_MARGIN = 50;       // keep indicators away from canvas left/right edges
+        const PROXIMITY_X_CLAMP_MARGIN = 50;
 
         const COLORS = {
             background: '#ffffff',
@@ -237,6 +236,10 @@
             if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'flap' }));
         }
 
+        function sendReady() {
+            if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ready' }));
+        }
+
         class GameScene extends Phaser.Scene {
             constructor() {
                 super({ key: 'GameScene' });
@@ -262,15 +265,16 @@
                 this.interpBuffers = new Map();
                 this.latestServerTime = 0;
 
-                // Latest player snapshot data (kept around for proximity indicator
-                // calculations — separate from interp buffers because we want the
-                // most recent known position, not a render-delayed sample).
-                this.latestPlayerData = new Map();  // id -> { x, y, alive }
+                this.latestPlayerData = new Map();
                 this.latestSpikeY = null;
 
-                // Pool of proximity indicators. Each entry holds a triangle and two
-                // text objects. Reused across frames; hidden when not in use.
                 this.proximityIndicatorPool = [];
+
+                // Round lifecycle state.
+                this.roundState = ROUND_RUNNING;
+                // Game-over overlay objects (when shown). Recreated each time
+                // ROUND_OVER is entered, destroyed on next reset.
+                this.gameOverObjs = null;
             }
 
             create() {
@@ -446,9 +450,6 @@
                 octG.generateTexture('octagon', octSize, octSize);
                 octG.destroy();
 
-                // Up-pointing triangle for proximity indicator (white fill, black outline).
-                // Texture is 22x22 with the triangle inscribed. The matching down-pointing
-                // sprite is the same texture flipped via setRotation(180deg).
                 const tSize = PROXIMITY_TRIANGLE_SIZE;
                 const tG = this.make.graphics();
                 tG.fillStyle(0xffffff);
@@ -511,7 +512,7 @@
                 this.textures.addCanvas(key, canvas);
             }
 
-            // === Proximity indicator pool management ===
+            // === Proximity indicator pool ===
             acquireProximityIndicator() {
                 for (const ind of this.proximityIndicatorPool) {
                     if (!ind.inUse) {
@@ -547,17 +548,11 @@
                 }
             }
 
-            // Draw a single proximity indicator. `pointsUp` true means the triangle
-            // is at the top of the screen pointing up (target is above the player);
-            // false means triangle at bottom pointing down (target is below).
             placeProximityIndicator(ind, screenX, pointsUp, line1Text, line2Text) {
-                // Clamp X so the indicator stays away from canvas edges.
                 const clampedX = Math.max(PROXIMITY_X_CLAMP_MARGIN,
                     Math.min(CANVAS_WIDTH - PROXIMITY_X_CLAMP_MARGIN, screenX));
 
                 if (pointsUp) {
-                    // Triangle near top of screen pointing up.
-                    // Layout below the triangle: line1 (distance), line2 (name).
                     const triY = PROXIMITY_EDGE_MARGIN;
                     ind.triangle.x = clampedX;
                     ind.triangle.y = triY;
@@ -567,8 +562,6 @@
                     ind.line2.x = clampedX;
                     ind.line2.y = ind.line1.y + PROXIMITY_TEXT_LINE_HEIGHT;
                 } else {
-                    // Triangle near bottom of screen pointing down.
-                    // Layout above the triangle: line1 (name), line2 (distance).
                     const triY = CANVAS_HEIGHT - PROXIMITY_EDGE_MARGIN;
                     ind.triangle.x = clampedX;
                     ind.triangle.y = triY;
@@ -583,21 +576,16 @@
                 ind.line2.setText(line2Text);
             }
 
-            // Camera-visible Y range. Used to decide what's off-screen.
             visibleYRange() {
                 const cam = this.cameras.main;
                 return { top: cam.scrollY, bottom: cam.scrollY + cam.height };
             }
 
-            // Convert world X to screen X (camera doesn't scroll horizontally so
-            // this is just the world X minus any camera horizontal offset, which
-            // is always 0 in our setup).
             worldToScreenX(worldX) {
                 return worldX - this.cameras.main.scrollX;
             }
 
             updateProximityIndicators() {
-                // Mark all indicators as available; we'll claim what we need below.
                 for (const ind of this.proximityIndicatorPool) ind.inUse = false;
 
                 if (!this.myState) {
@@ -608,23 +596,18 @@
                 const { top, bottom } = this.visibleYRange();
                 const myY = this.myState.y;
 
-                // 1. Player indicators — for every other alive player whose Y is
-                //    outside the visible range.
                 for (const [id, p] of this.latestPlayerData) {
                     if (id === mySessionId) continue;
                     if (!p.alive) continue;
 
                     let pointsUp;
-                    if (p.y < top) pointsUp = true;          // above visible
-                    else if (p.y > bottom) pointsUp = false; // below visible
-                    else continue;                            // on-screen, no indicator
+                    if (p.y < top) pointsUp = true;
+                    else if (p.y > bottom) pointsUp = false;
+                    else continue;
 
                     const ind = this.acquireProximityIndicator();
                     const screenX = this.worldToScreenX(p.x);
                     const distM = Math.round(Math.abs(p.y - myY));
-                    // line1/line2 semantics:
-                    //   pointsUp=true (above):  line1 = distance, line2 = name
-                    //   pointsUp=false (below): line1 = name,     line2 = distance
                     const distText = distM + 'm';
                     const nameText = id;
                     if (pointsUp) {
@@ -634,8 +617,6 @@
                     }
                 }
 
-                // 2. Spike indicator — when the spike line is below the visible
-                //    range (which is the only case in normal play).
                 if (this.latestSpikeY != null && this.latestSpikeY > bottom) {
                     const ind = this.acquireProximityIndicator();
                     const screenX = CANVAS_WIDTH / 2;
@@ -683,7 +664,67 @@
                 v.eyesContainer.destroy();
             }
 
+            // Wipe all visual + tracking state. Called when world_init arrives
+            // mid-conversation (after a server-side round reset).
+            resetAllVisualState() {
+                for (const s of this.blockSprites.values()) s.destroy();
+                this.blockSprites.clear();
+                for (const s of this.coinSprites.values()) s.destroy();
+                this.coinSprites.clear();
+                for (const s of this.sideWallSprites) s.destroy();
+                this.sideWallSprites = [];
+                for (const s of this.pentagonSprites.values()) s.destroy();
+                this.pentagonSprites.clear();
+                this.pentagonInterp.clear();
+                for (const refs of this.hexagonPairSprites.values()) {
+                    refs.leftHex.destroy(); refs.rightHex.destroy();
+                    refs.beamRect.destroy(); refs.beamGfx.destroy();
+                }
+                this.hexagonPairSprites.clear();
+                for (const s of this.heptagonSprites.values()) s.destroy();
+                this.heptagonSprites.clear();
+                this.heptagonInterp.clear();
+                for (const s of this.octagonSprites.values()) s.destroy();
+                this.octagonSprites.clear();
+                for (const s of this.projectileSprites.values()) s.destroy();
+                this.projectileSprites.clear();
+                this.projectileInterp.clear();
+
+                for (const v of this.playerVisuals.values()) this.destroyPlayerVisual(v);
+                this.playerVisuals.clear();
+                this.interpBuffers.clear();
+                this.latestPlayerData.clear();
+                this.previousAlive.clear();
+
+                this.latestSpikeY = null;
+                this.latestServerTime = 0;
+                this.myState = null;
+                this.myServerTarget = null;
+                this.cameraTarget = null;
+                this.cameras.main.stopFollow();
+
+                this.hideGameOverUI();
+                this.gameOverOverlayShown = false;
+
+                // Re-show the start tutorial since the new round hasn't started yet.
+                // (We may not have a reference to it after the first destroy, so
+                // create a fresh one.)
+                if (this.tutorialText && !this.tutorialText.active) {
+                    this.tutorialText = this.add.text(
+                        CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 100, 'TAP TO FLAP',
+                        { fontFamily: 'Arial', fontSize: '32px', color: COLORS.primary }
+                    ).setOrigin(0.5).setDepth(20).setScrollFactor(0);
+                }
+            }
+
             applyWorldInit(msg) {
+                // If we already had a world (i.e. this is a mid-conversation reset),
+                // wipe everything first.
+                if (this.blockSprites.size > 0 || this.playerVisuals.size > 0 ||
+                    this.sideWallSprites.length > 0 || this.gameOverOverlayShown) {
+                    this.resetAllVisualState();
+                }
+
                 for (const b of msg.blocks) this.spawnBlockSprite(b);
                 for (const c of msg.coins) this.spawnCoinSprite(c);
                 for (const seg of msg.sideWallSegments) this.spawnSideWallSegment(seg);
@@ -692,6 +733,8 @@
                 if (msg.heptagons) for (const h of msg.heptagons) this.spawnHeptagonSprite(h);
                 if (msg.octagons) for (const o of msg.octagons) this.spawnOctagonSprite(o);
                 if (msg.projectiles) for (const p of msg.projectiles) this.spawnProjectileSprite(p);
+
+                if (this.scoreText) this.scoreText.setText('0');
             }
 
             spawnBlockSprite(b) {
@@ -809,6 +852,21 @@
             applySnapshot(snap) {
                 if (snap.tServer != null && snap.tServer > this.latestServerTime) {
                     this.latestServerTime = snap.tServer;
+                }
+
+                // Track round state changes. Entering ROUND_OVER triggers the
+                // leaderboard overlay; entering RUNNING (after world_init has
+                // already wiped the world) just makes sure it's hidden.
+                const prevRoundState = this.roundState;
+                if (snap.roundState) this.roundState = snap.roundState;
+                if (prevRoundState !== ROUND_OVER && this.roundState === ROUND_OVER) {
+                    this.showRoundOverUI(snap.finalScores || []);
+                } else if (this.roundState === ROUND_OVER) {
+                    // Refresh leaderboard each tick — scores don't change during
+                    // round-over but a player joining/leaving should update the list.
+                    this.refreshRoundOverScores(snap.finalScores || []);
+                } else if (prevRoundState === ROUND_OVER && this.roundState === ROUND_RUNNING) {
+                    this.hideGameOverUI();
                 }
 
                 if (snap.newSideWallSegments) for (const seg of snap.newSideWallSegments) this.spawnSideWallSegment(seg);
@@ -938,7 +996,6 @@
                     seenIds.add(id);
                     const p = snap.players[id];
 
-                    // Latest authoritative player data, used for proximity indicators.
                     this.latestPlayerData.set(id, { x: p.x, y: p.y, alive: p.alive });
 
                     const isMe = (id === mySessionId);
@@ -967,6 +1024,9 @@
                             hasStarted: snap.hasStarted, stunned: p.stunned,
                         };
                         if (this.myState.alive && !p.alive) this.myState.alive = false;
+                        // Note: when a new round starts (alive=true after we previously
+                        // saw alive=false), the world_init that preceded it will have
+                        // wiped myState to null, so we'll re-init above as a fresh player.
 
                         if (this.scoreText) {
                             const s = (p.score || 0).toString();
@@ -980,7 +1040,8 @@
                         if (wasAlive !== false && p.alive === false) {
                             v.sprite.setTint(0xff0000);
                             v.eyesContainer.setVisible(false);
-                            this.showGameOver(p.score);
+                            // Don't show the per-player game-over here anymore — we wait
+                            // for the round to actually be over (server tells us).
                         }
                         this.previousAlive.set(id, p.alive);
                     } else {
@@ -1071,45 +1132,101 @@
                 }
             }
 
-            showGameOver(finalScore) {
-                if (this.gameOverOverlayShown) return;
+            // === Round-over UI ===
+            // Builds a leaderboard-style overlay. Pool is recreated each time
+            // ROUND_OVER is entered; destroyed on hide.
+            showRoundOverUI(finalScores) {
+                if (this.gameOverOverlayShown) {
+                    // Already shown — just refresh contents.
+                    this.refreshRoundOverScores(finalScores);
+                    return;
+                }
                 this.gameOverOverlayShown = true;
 
-                this._gameOverOverlay = this.add.rectangle(
+                const objs = {
+                    overlay: null,
+                    title: null,
+                    scoreLines: [],
+                    readyButton: null,
+                    readyButtonText: null,
+                };
+
+                objs.overlay = this.add.rectangle(
                     CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2,
                     CANVAS_WIDTH, CANVAS_HEIGHT, 0x000000, 0.8
                 ).setScrollFactor(0).setDepth(200);
 
-                this._gameOverText = this.add.text(
-                    CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 120, 'GAME OVER',
+                objs.title = this.add.text(
+                    CANVAS_WIDTH / 2, 220, 'GAME OVER',
                     {
                         fontFamily: 'Arial', fontSize: '64px', fontStyle: 'bold',
                         color: '#ffffff', stroke: '#000000', strokeThickness: 6
                     }
                 ).setOrigin(0.5).setScrollFactor(0).setDepth(201);
 
-                this._finalScoreText = this.add.text(
-                    CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 20, '' + (finalScore || 0),
-                    {
-                        fontFamily: 'Arial', fontSize: '96px', fontStyle: 'bold',
-                        color: '#ffffff', stroke: '#000000', strokeThickness: 4
-                    }
-                ).setOrigin(0.5).setScrollFactor(0).setDepth(201);
+                // Leaderboard lines — created here with empty text, populated by
+                // refreshRoundOverScores below.
+                const maxLines = 8;
+                for (let i = 0; i < maxLines; i++) {
+                    const lineY = 320 + i * 44;
+                    const t = this.add.text(CANVAS_WIDTH / 2, lineY, '', {
+                        fontFamily: 'Arial', fontSize: '28px', fontStyle: 'bold',
+                        color: '#ffffff', stroke: '#000000', strokeThickness: 4,
+                    }).setOrigin(0.5).setScrollFactor(0).setDepth(201).setVisible(false);
+                    objs.scoreLines.push(t);
+                }
 
-                this._restartButton = this.add.rectangle(
-                    CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 160, 280, 70, 0xffffff
+                objs.readyButton = this.add.rectangle(
+                    CANVAS_WIDTH / 2, CANVAS_HEIGHT - 160, 280, 70, 0xffffff
                 ).setScrollFactor(0).setDepth(201).setInteractive({ useHandCursor: true });
 
-                this._restartButtonText = this.add.text(
-                    CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 160, 'RELOAD',
+                objs.readyButtonText = this.add.text(
+                    CANVAS_WIDTH / 2, CANVAS_HEIGHT - 160, 'READY',
                     { fontFamily: 'Arial', fontSize: '32px', fontStyle: 'bold', color: '#000000' }
                 ).setOrigin(0.5).setScrollFactor(0).setDepth(202);
 
-                this._restartButton.on('pointerdown', () => window.location.reload());
+                objs.readyButton.on('pointerdown', () => {
+                    sendReady();
+                    // Visual feedback that the click was registered.
+                    objs.readyButtonText.setText('WAITING...');
+                    objs.readyButton.fillColor = 0xcccccc;
+                });
+
+                this.gameOverObjs = objs;
+                this.refreshRoundOverScores(finalScores);
+            }
+
+            refreshRoundOverScores(finalScores) {
+                if (!this.gameOverObjs) return;
+                const lines = this.gameOverObjs.scoreLines;
+                for (let i = 0; i < lines.length; i++) {
+                    if (i < finalScores.length) {
+                        const entry = finalScores[i];
+                        const rank = (i + 1) + '.';
+                        const isMe = entry.id === mySessionId;
+                        const label = `${rank} ${entry.id}${isMe ? ' (you)' : ''}  -  ${entry.score}`;
+                        lines[i].setText(label).setVisible(true);
+                    } else {
+                        lines[i].setVisible(false);
+                    }
+                }
+            }
+
+            hideGameOverUI() {
+                if (!this.gameOverObjs) return;
+                const o = this.gameOverObjs;
+                if (o.overlay) o.overlay.destroy();
+                if (o.title) o.title.destroy();
+                for (const t of o.scoreLines) t.destroy();
+                if (o.readyButton) o.readyButton.destroy();
+                if (o.readyButtonText) o.readyButtonText.destroy();
+                this.gameOverObjs = null;
+                this.gameOverOverlayShown = false;
             }
 
             applyFlapToMyState() {
                 if (!this.myState || !this.myState.alive) return false;
+                if (this.roundState !== ROUND_RUNNING) return false;
                 if (this.myServerTarget && this.myServerTarget.stunned) return false;
                 const now = performance.now();
                 if (now - this.myState.lastFlapTime < SIM.FLAP_COOLDOWN_MS) return false;
@@ -1127,6 +1244,7 @@
             stepMyState(deltaSeconds) {
                 if (!this.myState || !this.myState.alive) return;
                 if (this.myServerTarget && !this.myServerTarget.hasStarted) return;
+                if (this.roundState !== ROUND_RUNNING) return;
 
                 const s = this.myState;
                 s.vy += SIM.GRAVITY * deltaSeconds;
@@ -1272,7 +1390,10 @@
                     this.bgMid.tilePositionY = this.cameras.main.scrollY * 0.3;
                 }
 
-                if (!this.gameOverOverlayShown) {
+                // Input — only meaningful during ROUND_RUNNING. Pointer/space
+                // during ROUND_OVER doesn't flap (but the READY button still
+                // works because it's wired to its own pointerdown handler).
+                if (!this.gameOverOverlayShown && this.roundState === ROUND_RUNNING) {
                     const pointer = this.input.activePointer;
                     const isHeld = (pointer && pointer.isDown) || (this.spaceKey && this.spaceKey.isDown);
                     if (isHeld) {

@@ -57,7 +57,6 @@ const SIM = {
         fireDuration: 2000,
         rechargeDuration: 1000,
         spinDuration: 500,
-        // Beam height now actually drives the rendering. Pulse adds ±5 to this base.
         beamHeight: 36,
         beamPulseAmplitude: 5,
     },
@@ -78,6 +77,11 @@ const SIM = {
         range: 1000,
     },
 };
+
+// Round state machine values. Kept simple — just two states for now,
+// with transitions driven by "all alive players died" and the ready vote.
+const ROUND_RUNNING = 'running';
+const ROUND_OVER = 'round_over';
 
 function clampVelocity(p) {
     if (p.vx > SIM.MAX_VX) p.vx = SIM.MAX_VX;
@@ -407,6 +411,22 @@ function makePlayer(id) {
     };
 }
 
+// Reset an existing player in place — used during round reset so we keep
+// the same id (and thus the same WS binding) but wipe gameplay state.
+function resetPlayer(p) {
+    p.x = SIM.CANVAS_WIDTH / 2;
+    p.y = SIM.CANVAS_HEIGHT - SIM.START_Y_OFFSET;
+    p.vx = 0;
+    p.vy = 0;
+    p.alive = true;
+    p.facingRight = true;
+    p.score = 0;
+    p.lastFlapTime = -Infinity;
+    p.flapQueued = false;
+    p.nextFlapDirection = 1;
+    p.lastStunTime = -Infinity;
+}
+
 function makeMatch() {
     return {
         players: new Map(),
@@ -417,6 +437,8 @@ function makeMatch() {
         hasStarted: false,
         nextIntervalIndex: 0,
         eventsThisTick: [],
+        roundState: ROUND_RUNNING,
+        pendingWorldInitForAll: false, // set by reset(), consumed by the tick loop
     };
 }
 
@@ -427,10 +449,30 @@ function addPlayer(match, id) {
 }
 function removePlayer(match, id) { match.players.delete(id); }
 function queueFlap(match, id) {
+    // No flapping during ROUND_OVER — the player is either dead or waiting.
+    if (match.roundState !== ROUND_RUNNING) return;
     const p = match.players.get(id);
     if (!p || !p.alive) return;
     if (match.elapsedMs - p.lastStunTime < SIM.STUN_DURATION_MS) return;
     p.flapQueued = true;
+}
+
+// Triggered by any client during ROUND_OVER. Wipes the world and resets
+// all connected players to start.
+function resetMatch(match) {
+    match.world = makeWorld();
+    match.spikeY = SIM.CANVAS_HEIGHT + SIM.SPIKE_INITIAL_OFFSET;
+    match.hazardSpeed = SIM.HAZARD_BASE_SPEED;
+    match.elapsedMs = 0;
+    match.hasStarted = false;
+    match.nextIntervalIndex = 0;
+    match.eventsThisTick = [];
+    match.roundState = ROUND_RUNNING;
+    for (const p of match.players.values()) {
+        resetPlayer(p);
+    }
+    // Tell the next tick to send a fresh world_init to everyone.
+    match.pendingWorldInitForAll = true;
 }
 
 function highestPlayerY(match) {
@@ -443,6 +485,21 @@ function highestPlayerY(match) {
 }
 function altitudeFromY(y) {
     return Math.max(0, Math.floor((SIM.CANVAS_HEIGHT - SIM.START_Y_OFFSET) - y));
+}
+
+// True if any connected player is still alive. Returns false if zero
+// players are connected — used to gate the round-over transition.
+function anyAlive(match) {
+    for (const p of match.players.values()) {
+        if (p.alive) return true;
+    }
+    return false;
+}
+
+// True if any player exists (alive or dead) — distinguishes "no one is
+// in the room" from "all dead", which we treat differently.
+function anyPlayers(match) {
+    return match.players.size > 0;
 }
 
 function resolveBlockBounce(p, block, scale, eventsArr) {
@@ -502,7 +559,16 @@ function resolveCircleBounce(p, cx, cy, cr, eventsArr, stunBoost = false, match 
 }
 
 function step(match, deltaSeconds) {
+    // Always advance the wall clock so logs are coherent and post-flap
+    // grace windows on clients don't run on a frozen timer. But while in
+    // ROUND_OVER, skip all simulation work below.
     match.elapsedMs += deltaSeconds * 1000;
+    match.eventsThisTick = [];
+
+    if (match.roundState === ROUND_OVER) {
+        return;
+    }
+
     const w = match.world;
     w.newBlocks = []; w.newCoins = [];
     w.newPentagons = []; w.newHexagonPairs = []; w.newHeptagons = []; w.newOctagons = [];
@@ -510,7 +576,6 @@ function step(match, deltaSeconds) {
     w.removedBlockIds = []; w.removedCoinIds = [];
     w.removedPentagonIds = []; w.removedHexagonPairIds = []; w.removedHeptagonIds = [];
     w.removedOctagonIds = []; w.removedProjectileIds = [];
-    match.eventsThisTick = [];
 
     if (!match.hasStarted) {
         for (const p of match.players.values()) {
@@ -556,7 +621,6 @@ function step(match, deltaSeconds) {
             pair.leftAngle = 720 + fireProgress * 180;
             pair.rightAngle = -720 - fireProgress * 180;
             pair.beamActive = true;
-            // Beam height: configured base + sinusoidal pulse around it.
             const pulseProgress = fireProgress * 4 * Math.PI * 2;
             pair.beamHeight = SIM.HEXAGON.beamHeight + Math.sin(pulseProgress) * SIM.HEXAGON.beamPulseAmplitude;
         }
@@ -772,6 +836,13 @@ function step(match, deltaSeconds) {
         }
         match.eventsThisTick.push({ type: 'interval_reached', n: intervalNumber });
     }
+
+    // Round-end check: only relevant once at least one player has been
+    // playing (hasStarted) and the round is currently RUNNING. We don't
+    // want to declare round-over before anyone has flapped.
+    if (match.hasStarted && match.roundState === ROUND_RUNNING && anyPlayers(match) && !anyAlive(match)) {
+        match.roundState = ROUND_OVER;
+    }
 }
 
 function buildWorldInit(world) {
@@ -822,12 +893,22 @@ function buildSnapshot(match) {
         projectileStates[proj.id] = { x: proj.x, y: proj.y, vx: proj.vx, vy: proj.vy, scale: proj.scale };
     }
 
+    // Final-scores leaderboard — only meaningful during ROUND_OVER but
+    // cheap enough to send always. Sorted descending by score.
+    const finalScores = [];
+    for (const p of match.players.values()) {
+        finalScores.push({ id: p.id, score: p.score });
+    }
+    finalScores.sort((a, b) => b.score - a.score);
+
     return {
         type: 'snapshot',
         tServer: match.elapsedMs,
         spikeY: match.spikeY,
         hasStarted: match.hasStarted,
         hazardSpeed: match.hazardSpeed,
+        roundState: match.roundState,
+        finalScores,
         players,
         newBlocks: match.world.newBlocks,
         newCoins: match.world.newCoins,
@@ -875,7 +956,7 @@ wss.on('connection', (ws) => {
     sessionByWs.set(ws, sessionId);
     sideWallSeenByWs.set(ws, 0);
     addPlayer(match, sessionId);
-    console.log(`[server] ${sessionId} joined (${match.players.size} total)`);
+    console.log(`[server] ${sessionId} joined (${match.players.size} total, round=${match.roundState})`);
 
     ws.send(JSON.stringify({ type: 'welcome', sessionId }));
     ws.send(JSON.stringify(buildWorldInit(match.world)));
@@ -884,14 +965,30 @@ wss.on('connection', (ws) => {
     ws.on('message', (raw) => {
         let msg;
         try { msg = JSON.parse(raw.toString()); } catch { return; }
-        if (msg.type === 'flap') queueFlap(match, sessionId);
+        if (msg.type === 'flap') {
+            queueFlap(match, sessionId);
+        } else if (msg.type === 'ready') {
+            // Only honored during ROUND_OVER. First ready wins; subsequent
+            // ones during the same over-state are ignored (the resetMatch
+            // call flips state to RUNNING).
+            if (match.roundState === ROUND_OVER) {
+                console.log(`[server] ${sessionId} pressed READY — resetting round`);
+                resetMatch(match);
+            }
+        }
     });
 
     ws.on('close', () => {
         sessionByWs.delete(ws);
         sideWallSeenByWs.delete(ws);
         removePlayer(match, sessionId);
-        console.log(`[server] ${sessionId} left (${match.players.size} total)`);
+        console.log(`[server] ${sessionId} left (${match.players.size} total, round=${match.roundState})`);
+        // If everyone disconnected during ROUND_OVER, snap back to RUNNING
+        // so the next joiner gets a clean start.
+        if (match.roundState === ROUND_OVER && !anyPlayers(match)) {
+            console.log(`[server] all players gone during ROUND_OVER — auto-resetting`);
+            resetMatch(match);
+        }
     });
 
     ws.on('error', (err) => console.warn(`[server] ws error for ${sessionId}:`, err.message));
@@ -906,6 +1003,20 @@ setInterval(() => {
     lastTickTime = now;
 
     step(match, deltaMs / 1000);
+
+    // Round reset just happened? Send a fresh world_init to all clients
+    // BEFORE the regular snapshot. Clients will wipe their local state and
+    // rebuild from scratch, then receive the next snapshot which is the
+    // first one of the new round.
+    if (match.pendingWorldInitForAll) {
+        match.pendingWorldInitForAll = false;
+        const initMsg = JSON.stringify(buildWorldInit(match.world));
+        for (const ws of wss.clients) {
+            if (ws.readyState !== 1) continue;
+            ws.send(initMsg);
+            sideWallSeenByWs.set(ws, match.world.sideWallSegments.length);
+        }
+    }
 
     const snapBase = buildSnapshot(match);
     const blockScales = {};
@@ -933,7 +1044,7 @@ setInterval(() => {
         if (match.players.size > 0) {
             const w = match.world;
             const lines = [
-                `t=${(match.elapsedMs / 1000).toFixed(1)}s spikeY=${match.spikeY.toFixed(0)} hazard=${match.hazardSpeed} interval=${match.nextIntervalIndex} ` +
+                `t=${(match.elapsedMs / 1000).toFixed(1)}s round=${match.roundState} spikeY=${match.spikeY.toFixed(0)} hazard=${match.hazardSpeed} interval=${match.nextIntervalIndex} ` +
                 `blocks=${w.blocks.size} coins=${w.coins.size} pent=${w.pentagons.size} hex=${w.hexagonPairs.size} ` +
                 `hept=${w.heptagons.size} oct=${w.octagons.size} proj=${w.projectiles.size}`
             ];
