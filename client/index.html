@@ -169,6 +169,7 @@
             OCTAGON_SIZE: 135,
         };
 
+        const ROUND_COUNTDOWN = 'countdown';
         const ROUND_RUNNING = 'running';
         const ROUND_OVER = 'round_over';
 
@@ -270,11 +271,13 @@
 
                 this.proximityIndicatorPool = [];
 
-                // Round lifecycle state.
-                this.roundState = ROUND_RUNNING;
-                // Game-over overlay objects (when shown). Recreated each time
-                // ROUND_OVER is entered, destroyed on next reset.
+                this.roundState = ROUND_COUNTDOWN;
                 this.gameOverObjs = null;
+
+                // Countdown UI objects (recreated when entering COUNTDOWN, destroyed
+                // when entering RUNNING).
+                this.countdownText = null;
+                this.lastCountdownNumberShown = null;
             }
 
             create() {
@@ -291,9 +294,13 @@
                 this.bgMid = this.add.tileSprite(CANVAS_WIDTH / 2, 0, 1024, 2048, 'bg_mid')
                     .setOrigin(0.5, 0).setScrollFactor(0).setDepth(-9).setScale(bgScale);
 
+                // Spike "abyss" container. The black backdrop is enormous so even
+                // when the camera is far above the spike line, you can never see
+                // past the bottom — it always reads as a void.
+                // This does not cause performance issues
                 this.spikeContainer = this.add.container(0, CANVAS_HEIGHT + 50);
                 this.spikeContainer.setDepth(5);
-                const spikeBgHeight = 4000;
+                const spikeBgHeight = 1000000;
                 const spikeBg = this.add.rectangle(0, 45, CANVAS_WIDTH, spikeBgHeight, 0x000000);
                 spikeBg.setOrigin(0, 0);
                 this.spikeContainer.add(spikeBg);
@@ -471,13 +478,18 @@
                     });
             }
 
+            // Generate a cathedral parallax-layer texture. Previously this drew a
+            // white background then walked every pixel converting white to alpha;
+            // that's a 2-million-pixel pass on a midrange phone. Now we leave the
+            // canvas transparent (default) and only fill the gray architecture.
+            // Same visual result, no per-pixel post-processing.
             generateBackgroundTexture(key, opts) {
                 const W = 1024, H = 2048;
                 const center = W / 2;
                 const canvas = document.createElement('canvas');
                 canvas.width = W; canvas.height = H;
                 const ctx = canvas.getContext('2d');
-                ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
+                // Canvas starts transparent — that's our "background".
                 ctx.fillStyle = opts.fill;
                 ctx.fillRect(center - opts.centerBandW / 2, 0, opts.centerBandW, H);
                 ctx.fillRect(center - opts.towerDist - opts.towerW, 0, opts.towerW, H);
@@ -503,12 +515,6 @@
                     ctx.quadraticCurveTo(rightStart + rightWidth / 2, bridgeBottom - opts.curveR, rightStart, bridgeBottom);
                     ctx.closePath(); ctx.fill();
                 }
-                const imgData = ctx.getImageData(0, 0, W, H);
-                const data = imgData.data;
-                for (let i = 0; i < data.length; i += 4) {
-                    if (data[i] === 255 && data[i + 1] === 255 && data[i + 2] === 255) data[i + 3] = 0;
-                }
-                ctx.putImageData(imgData, 0, 0);
                 this.textures.addCanvas(key, canvas);
             }
 
@@ -664,8 +670,6 @@
                 v.eyesContainer.destroy();
             }
 
-            // Wipe all visual + tracking state. Called when world_init arrives
-            // mid-conversation (after a server-side round reset).
             resetAllVisualState() {
                 for (const s of this.blockSprites.values()) s.destroy();
                 this.blockSprites.clear();
@@ -705,10 +709,8 @@
 
                 this.hideGameOverUI();
                 this.gameOverOverlayShown = false;
+                this.hideCountdownUI();
 
-                // Re-show the start tutorial since the new round hasn't started yet.
-                // (We may not have a reference to it after the first destroy, so
-                // create a fresh one.)
                 if (this.tutorialText && !this.tutorialText.active) {
                     this.tutorialText = this.add.text(
                         CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 100, 'TAP TO FLAP',
@@ -718,8 +720,6 @@
             }
 
             applyWorldInit(msg) {
-                // If we already had a world (i.e. this is a mid-conversation reset),
-                // wipe everything first.
                 if (this.blockSprites.size > 0 || this.playerVisuals.size > 0 ||
                     this.sideWallSprites.length > 0 || this.gameOverOverlayShown) {
                     this.resetAllVisualState();
@@ -849,24 +849,69 @@
                 return buf[buf.length - 1];
             }
 
+            // === Countdown UI ===
+            showCountdownUI() {
+                if (this.countdownText) return;
+                this.countdownText = this.add.text(
+                    CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, '',
+                    {
+                        fontFamily: 'Arial', fontSize: '180px', fontStyle: 'bold',
+                        color: '#000000', stroke: '#ffffff', strokeThickness: 12
+                    }
+                ).setOrigin(0.5).setScrollFactor(0).setDepth(150);
+                this.lastCountdownNumberShown = null;
+            }
+
+            hideCountdownUI() {
+                if (this.countdownText) {
+                    this.countdownText.destroy();
+                    this.countdownText = null;
+                }
+                this.lastCountdownNumberShown = null;
+            }
+
+            updateCountdownUI(remainingMs) {
+                if (!this.countdownText) return;
+                // Display ceil of remaining seconds — 9.6s shows "10", 0.4s shows "1".
+                // When remainingMs reaches 0, we've already transitioned to RUNNING
+                // server-side, so the countdown UI gets hidden by the round-state
+                // transition handler. As a flourish, show "GO!" briefly when we
+                // see the very last second tick down to 0.
+                const number = Math.ceil(remainingMs / 1000);
+                const text = number > 0 ? String(number) : 'GO!';
+                if (text !== this.lastCountdownNumberShown) {
+                    this.countdownText.setText(text);
+                    this.lastCountdownNumberShown = text;
+                    // Subtle pulse on each new number for visual rhythm.
+                    this.countdownText.setScale(1.2);
+                    this.tweens.add({
+                        targets: this.countdownText, scale: 1.0, duration: 400, ease: 'Quad.easeOut',
+                    });
+                }
+            }
+
             applySnapshot(snap) {
                 if (snap.tServer != null && snap.tServer > this.latestServerTime) {
                     this.latestServerTime = snap.tServer;
                 }
 
-                // Track round state changes. Entering ROUND_OVER triggers the
-                // leaderboard overlay; entering RUNNING (after world_init has
-                // already wiped the world) just makes sure it's hidden.
+                // Track round state transitions.
                 const prevRoundState = this.roundState;
                 if (snap.roundState) this.roundState = snap.roundState;
+
                 if (prevRoundState !== ROUND_OVER && this.roundState === ROUND_OVER) {
                     this.showRoundOverUI(snap.finalScores || []);
                 } else if (this.roundState === ROUND_OVER) {
-                    // Refresh leaderboard each tick — scores don't change during
-                    // round-over but a player joining/leaving should update the list.
                     this.refreshRoundOverScores(snap.finalScores || []);
-                } else if (prevRoundState === ROUND_OVER && this.roundState === ROUND_RUNNING) {
+                } else if (prevRoundState === ROUND_OVER && this.roundState !== ROUND_OVER) {
                     this.hideGameOverUI();
+                }
+
+                if (this.roundState === ROUND_COUNTDOWN) {
+                    this.showCountdownUI();
+                    this.updateCountdownUI(snap.countdownRemainingMs || 0);
+                } else if (prevRoundState === ROUND_COUNTDOWN && this.roundState !== ROUND_COUNTDOWN) {
+                    this.hideCountdownUI();
                 }
 
                 if (snap.newSideWallSegments) for (const seg of snap.newSideWallSegments) this.spawnSideWallSegment(seg);
@@ -1024,9 +1069,6 @@
                             hasStarted: snap.hasStarted, stunned: p.stunned,
                         };
                         if (this.myState.alive && !p.alive) this.myState.alive = false;
-                        // Note: when a new round starts (alive=true after we previously
-                        // saw alive=false), the world_init that preceded it will have
-                        // wiped myState to null, so we'll re-init above as a fresh player.
 
                         if (this.scoreText) {
                             const s = (p.score || 0).toString();
@@ -1040,8 +1082,6 @@
                         if (wasAlive !== false && p.alive === false) {
                             v.sprite.setTint(0xff0000);
                             v.eyesContainer.setVisible(false);
-                            // Don't show the per-player game-over here anymore — we wait
-                            // for the round to actually be over (server tells us).
                         }
                         this.previousAlive.set(id, p.alive);
                     } else {
@@ -1070,8 +1110,13 @@
                     for (const ev of snap.events) {
                         if (ev.type === 'coin_collected') this.playCoinFX(ev.x, ev.y);
                         else if (ev.type === 'hit') {
-                            this.cameras.main.shake(80, 0.004);
+                            // Particles for any hit (visual context). Camera shake is
+                            // local-player-only — we don't want every other player's
+                            // bumps shaking our screen.
                             this.spawnParticles(ev.x, ev.y);
+                            if (ev.playerId === mySessionId) {
+                                this.cameras.main.shake(80, 0.004);
+                            }
                         } else if (ev.type === 'interval_reached') {
                             this.cameras.main.flash(300, 255, 255, 255);
                         }
@@ -1132,12 +1177,8 @@
                 }
             }
 
-            // === Round-over UI ===
-            // Builds a leaderboard-style overlay. Pool is recreated each time
-            // ROUND_OVER is entered; destroyed on hide.
             showRoundOverUI(finalScores) {
                 if (this.gameOverOverlayShown) {
-                    // Already shown — just refresh contents.
                     this.refreshRoundOverScores(finalScores);
                     return;
                 }
@@ -1164,8 +1205,6 @@
                     }
                 ).setOrigin(0.5).setScrollFactor(0).setDepth(201);
 
-                // Leaderboard lines — created here with empty text, populated by
-                // refreshRoundOverScores below.
                 const maxLines = 8;
                 for (let i = 0; i < maxLines; i++) {
                     const lineY = 320 + i * 44;
@@ -1187,7 +1226,6 @@
 
                 objs.readyButton.on('pointerdown', () => {
                     sendReady();
-                    // Visual feedback that the click was registered.
                     objs.readyButtonText.setText('WAITING...');
                     objs.readyButton.fillColor = 0xcccccc;
                 });
@@ -1226,6 +1264,9 @@
 
             applyFlapToMyState() {
                 if (!this.myState || !this.myState.alive) return false;
+                // Flap input is gated by round state. During COUNTDOWN, input is
+                // ignored regardless of where the click came from — so the READY
+                // button's pointerdown can't bleed into a flap.
                 if (this.roundState !== ROUND_RUNNING) return false;
                 if (this.myServerTarget && this.myServerTarget.stunned) return false;
                 const now = performance.now();
@@ -1390,9 +1431,10 @@
                     this.bgMid.tilePositionY = this.cameras.main.scrollY * 0.3;
                 }
 
-                // Input — only meaningful during ROUND_RUNNING. Pointer/space
-                // during ROUND_OVER doesn't flap (but the READY button still
-                // works because it's wired to its own pointerdown handler).
+                // Flap input is allowed only during ROUND_RUNNING. During COUNTDOWN
+                // and ROUND_OVER, taps are ignored — including the tap that just
+                // pressed the READY button, since by the time RUNNING starts the
+                // user has lifted their finger.
                 if (!this.gameOverOverlayShown && this.roundState === ROUND_RUNNING) {
                     const pointer = this.input.activePointer;
                     const isHeld = (pointer && pointer.isDown) || (this.spaceKey && this.spaceKey.isDown);

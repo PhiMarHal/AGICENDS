@@ -42,6 +42,10 @@ const SIM = {
     STUN_DURATION_MS: 400,
     STUN_KNOCKBACK_BOOST: 2.0,
 
+    // Countdown phase before each round starts. Players are at start
+    // position, gravity off, no spikes rising, no flap input accepted.
+    COUNTDOWN_SECONDS: 10,
+
     PENTAGON: {
         startInterval: 5,
         spawnRate: [2, 4],
@@ -78,8 +82,11 @@ const SIM = {
     },
 };
 
-// Round state machine values. Kept simple — just two states for now,
-// with transitions driven by "all alive players died" and the ready vote.
+// Round states. The full lifecycle is:
+//   COUNTDOWN -> RUNNING (after countdown reaches 0)
+//   RUNNING   -> ROUND_OVER (when all players are dead)
+//   ROUND_OVER -> COUNTDOWN (when any player presses ready)
+const ROUND_COUNTDOWN = 'countdown';
 const ROUND_RUNNING = 'running';
 const ROUND_OVER = 'round_over';
 
@@ -411,8 +418,6 @@ function makePlayer(id) {
     };
 }
 
-// Reset an existing player in place — used during round reset so we keep
-// the same id (and thus the same WS binding) but wipe gameplay state.
 function resetPlayer(p) {
     p.x = SIM.CANVAS_WIDTH / 2;
     p.y = SIM.CANVAS_HEIGHT - SIM.START_Y_OFFSET;
@@ -437,8 +442,12 @@ function makeMatch() {
         hasStarted: false,
         nextIntervalIndex: 0,
         eventsThisTick: [],
-        roundState: ROUND_RUNNING,
-        pendingWorldInitForAll: false, // set by reset(), consumed by the tick loop
+        // First-ever match starts in countdown so even the first joiner gets a
+        // proper grace period. (Rounds after the first start the same way via
+        // resetMatch.)
+        roundState: ROUND_COUNTDOWN,
+        countdownEndsAtMs: SIM.COUNTDOWN_SECONDS * 1000, // wall-clock ms target
+        pendingWorldInitForAll: false,
     };
 }
 
@@ -449,7 +458,6 @@ function addPlayer(match, id) {
 }
 function removePlayer(match, id) { match.players.delete(id); }
 function queueFlap(match, id) {
-    // No flapping during ROUND_OVER — the player is either dead or waiting.
     if (match.roundState !== ROUND_RUNNING) return;
     const p = match.players.get(id);
     if (!p || !p.alive) return;
@@ -457,8 +465,8 @@ function queueFlap(match, id) {
     p.flapQueued = true;
 }
 
-// Triggered by any client during ROUND_OVER. Wipes the world and resets
-// all connected players to start.
+// Reset match — called when a ready vote arrives during ROUND_OVER. Wipes
+// the world and starts a fresh COUNTDOWN.
 function resetMatch(match) {
     match.world = makeWorld();
     match.spikeY = SIM.CANVAS_HEIGHT + SIM.SPIKE_INITIAL_OFFSET;
@@ -467,11 +475,11 @@ function resetMatch(match) {
     match.hasStarted = false;
     match.nextIntervalIndex = 0;
     match.eventsThisTick = [];
-    match.roundState = ROUND_RUNNING;
+    match.roundState = ROUND_COUNTDOWN;
+    match.countdownEndsAtMs = SIM.COUNTDOWN_SECONDS * 1000;
     for (const p of match.players.values()) {
         resetPlayer(p);
     }
-    // Tell the next tick to send a fresh world_init to everyone.
     match.pendingWorldInitForAll = true;
 }
 
@@ -487,17 +495,12 @@ function altitudeFromY(y) {
     return Math.max(0, Math.floor((SIM.CANVAS_HEIGHT - SIM.START_Y_OFFSET) - y));
 }
 
-// True if any connected player is still alive. Returns false if zero
-// players are connected — used to gate the round-over transition.
 function anyAlive(match) {
     for (const p of match.players.values()) {
         if (p.alive) return true;
     }
     return false;
 }
-
-// True if any player exists (alive or dead) — distinguishes "no one is
-// in the room" from "all dead", which we treat differently.
 function anyPlayers(match) {
     return match.players.size > 0;
 }
@@ -524,7 +527,7 @@ function resolveBlockBounce(p, block, scale, eventsArr) {
             p.vy -= (1 + bounce) * vDotN * ny;
             clampVelocity(p);
         }
-        eventsArr.push({ type: 'hit', x: p.x, y: p.y });
+        eventsArr.push({ type: 'hit', x: p.x, y: p.y, playerId: p.id });
         return true;
     }
     return false;
@@ -552,23 +555,39 @@ function resolveCircleBounce(p, cx, cy, cr, eventsArr, stunBoost = false, match 
             }
             clampVelocity(p);
         }
-        eventsArr.push({ type: 'hit', x: p.x, y: p.y });
+        eventsArr.push({ type: 'hit', x: p.x, y: p.y, playerId: p.id });
         return true;
     }
     return false;
 }
 
 function step(match, deltaSeconds) {
-    // Always advance the wall clock so logs are coherent and post-flap
-    // grace windows on clients don't run on a frozen timer. But while in
-    // ROUND_OVER, skip all simulation work below.
     match.elapsedMs += deltaSeconds * 1000;
     match.eventsThisTick = [];
 
+    // ROUND_OVER: pause everything except clock.
     if (match.roundState === ROUND_OVER) {
         return;
     }
 
+    // COUNTDOWN: tick the timer, hold positions. Generate world chunks
+    // around the start position so the visible area is populated. No
+    // gravity, no spike rise, no flap input accepted (server enforces
+    // by only honoring queueFlap during ROUND_RUNNING).
+    if (match.roundState === ROUND_COUNTDOWN) {
+        // Generate enough world above the start so when the round starts it
+        // looks fully inhabited rather than streaming in from above.
+        const startY = SIM.CANVAS_HEIGHT - SIM.START_Y_OFFSET;
+        generateChunks(match.world, startY - SIM.CANVAS_HEIGHT * 1.5, match.elapsedMs);
+
+        if (match.elapsedMs >= match.countdownEndsAtMs) {
+            match.roundState = ROUND_RUNNING;
+            console.log(`[server] countdown ended — round running`);
+        }
+        return;
+    }
+
+    // === ROUND_RUNNING from here ===
     const w = match.world;
     w.newBlocks = []; w.newCoins = [];
     w.newPentagons = []; w.newHexagonPairs = []; w.newHeptagons = []; w.newOctagons = [];
@@ -577,6 +596,10 @@ function step(match, deltaSeconds) {
     w.removedPentagonIds = []; w.removedHexagonPairIds = []; w.removedHeptagonIds = [];
     w.removedOctagonIds = []; w.removedProjectileIds = [];
 
+    // hasStarted gate: until someone flaps, gravity & spikes are paused.
+    // (After the countdown system, this is mostly redundant — but it preserves
+    // the behavior of "wait for first input even after countdown" if anyone
+    // takes their finger off the screen by then.)
     if (!match.hasStarted) {
         for (const p of match.players.values()) {
             if (!p.flapQueued) continue;
@@ -704,12 +727,12 @@ function step(match, deltaSeconds) {
         if (newX < minX) {
             newX = minX;
             if (p.vx < 0) p.vx = -p.vx * (1 + SIM.PLAYER_BOUNCE * 0.5);
-            match.eventsThisTick.push({ type: 'hit', x: newX, y: newY });
+            match.eventsThisTick.push({ type: 'hit', x: newX, y: newY, playerId: p.id });
         }
         if (newX > maxX) {
             newX = maxX;
             if (p.vx > 0) p.vx = -p.vx * (1 + SIM.PLAYER_BOUNCE * 0.5);
-            match.eventsThisTick.push({ type: 'hit', x: newX, y: newY });
+            match.eventsThisTick.push({ type: 'hit', x: newX, y: newY, playerId: p.id });
         }
         p.x = newX;
         p.y = newY;
@@ -774,7 +797,7 @@ function step(match, deltaSeconds) {
                     clampVelocity(p);
                     p.lastStunTime = match.elapsedMs;
                 }
-                match.eventsThisTick.push({ type: 'hit', x: p.x, y: p.y });
+                match.eventsThisTick.push({ type: 'hit', x: p.x, y: p.y, playerId: p.id });
             }
         }
 
@@ -837,9 +860,6 @@ function step(match, deltaSeconds) {
         match.eventsThisTick.push({ type: 'interval_reached', n: intervalNumber });
     }
 
-    // Round-end check: only relevant once at least one player has been
-    // playing (hasStarted) and the round is currently RUNNING. We don't
-    // want to declare round-over before anyone has flapped.
     if (match.hasStarted && match.roundState === ROUND_RUNNING && anyPlayers(match) && !anyAlive(match)) {
         match.roundState = ROUND_OVER;
     }
@@ -893,13 +913,17 @@ function buildSnapshot(match) {
         projectileStates[proj.id] = { x: proj.x, y: proj.y, vx: proj.vx, vy: proj.vy, scale: proj.scale };
     }
 
-    // Final-scores leaderboard — only meaningful during ROUND_OVER but
-    // cheap enough to send always. Sorted descending by score.
     const finalScores = [];
     for (const p of match.players.values()) {
         finalScores.push({ id: p.id, score: p.score });
     }
     finalScores.sort((a, b) => b.score - a.score);
+
+    // Countdown remaining ms — only meaningful while in COUNTDOWN, but cheap.
+    let countdownRemainingMs = 0;
+    if (match.roundState === ROUND_COUNTDOWN) {
+        countdownRemainingMs = Math.max(0, match.countdownEndsAtMs - match.elapsedMs);
+    }
 
     return {
         type: 'snapshot',
@@ -908,6 +932,7 @@ function buildSnapshot(match) {
         hasStarted: match.hasStarted,
         hazardSpeed: match.hazardSpeed,
         roundState: match.roundState,
+        countdownRemainingMs,
         finalScores,
         players,
         newBlocks: match.world.newBlocks,
@@ -946,13 +971,24 @@ const match = makeMatch();
 const sessionByWs = new Map();
 const sideWallSeenByWs = new Map();
 
-let nextSessionNum = 1;
-function newSessionId() {
-    return 'p' + (nextSessionNum++) + '-' + Math.random().toString(36).slice(2, 6);
+// Smallest-free-int session naming. With max ~8 concurrent players, we
+// scan existing player IDs to find the smallest unused integer prefix.
+// This means a player who refreshes will likely be re-assigned the same
+// "p1" / "p2" label, and player numbers stay in a tight range.
+function newSessionId(match) {
+    const usedNumbers = new Set();
+    for (const id of match.players.keys()) {
+        const m = id.match(/^p(\d+)-/);
+        if (m) usedNumbers.add(parseInt(m[1], 10));
+    }
+    let n = 1;
+    while (usedNumbers.has(n)) n++;
+    const suffix = Math.random().toString(36).slice(2, 6);
+    return 'p' + n + '-' + suffix;
 }
 
 wss.on('connection', (ws) => {
-    const sessionId = newSessionId();
+    const sessionId = newSessionId(match);
     sessionByWs.set(ws, sessionId);
     sideWallSeenByWs.set(ws, 0);
     addPlayer(match, sessionId);
@@ -968,9 +1004,6 @@ wss.on('connection', (ws) => {
         if (msg.type === 'flap') {
             queueFlap(match, sessionId);
         } else if (msg.type === 'ready') {
-            // Only honored during ROUND_OVER. First ready wins; subsequent
-            // ones during the same over-state are ignored (the resetMatch
-            // call flips state to RUNNING).
             if (match.roundState === ROUND_OVER) {
                 console.log(`[server] ${sessionId} pressed READY — resetting round`);
                 resetMatch(match);
@@ -983,8 +1016,6 @@ wss.on('connection', (ws) => {
         sideWallSeenByWs.delete(ws);
         removePlayer(match, sessionId);
         console.log(`[server] ${sessionId} left (${match.players.size} total, round=${match.roundState})`);
-        // If everyone disconnected during ROUND_OVER, snap back to RUNNING
-        // so the next joiner gets a clean start.
         if (match.roundState === ROUND_OVER && !anyPlayers(match)) {
             console.log(`[server] all players gone during ROUND_OVER — auto-resetting`);
             resetMatch(match);
@@ -1004,10 +1035,6 @@ setInterval(() => {
 
     step(match, deltaMs / 1000);
 
-    // Round reset just happened? Send a fresh world_init to all clients
-    // BEFORE the regular snapshot. Clients will wipe their local state and
-    // rebuild from scratch, then receive the next snapshot which is the
-    // first one of the new round.
     if (match.pendingWorldInitForAll) {
         match.pendingWorldInitForAll = false;
         const initMsg = JSON.stringify(buildWorldInit(match.world));
