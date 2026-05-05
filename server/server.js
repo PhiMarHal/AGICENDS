@@ -42,8 +42,6 @@ const SIM = {
     STUN_DURATION_MS: 400,
     STUN_KNOCKBACK_BOOST: 2.0,
 
-    // Countdown phase before each round starts. Players are at start
-    // position, gravity off, no spikes rising, no flap input accepted.
     COUNTDOWN_SECONDS: 10,
 
     PENTAGON: {
@@ -82,10 +80,6 @@ const SIM = {
     },
 };
 
-// Round states. The full lifecycle is:
-//   COUNTDOWN -> RUNNING (after countdown reaches 0)
-//   RUNNING   -> ROUND_OVER (when all players are dead)
-//   ROUND_OVER -> COUNTDOWN (when any player presses ready)
 const ROUND_COUNTDOWN = 'countdown';
 const ROUND_RUNNING = 'running';
 const ROUND_OVER = 'round_over';
@@ -125,7 +119,31 @@ function makeWorld() {
         removedBlockIds: [], removedCoinIds: [],
         removedPentagonIds: [], removedHexagonPairIds: [], removedHeptagonIds: [],
         removedOctagonIds: [], removedProjectileIds: [],
+        dirtyBlockScales: new Set(),
     };
+}
+
+// Reset all per-tick delta arrays. Called at the top of every tick,
+// regardless of round state, so anything generated during this tick
+// goes into a fresh delta and downstream snapshot construction reads
+// exactly what was generated this tick.
+//
+// This was previously only done inside the ROUND_RUNNING branch of
+// step(), which meant during ROUND_COUNTDOWN the same `newBlocks` /
+// `newCoins` populated by the first generateChunks call kept getting
+// re-broadcast every tick. Clients then spawned duplicate sprites for
+// every block and coin once per tick — at 60Hz over 10 seconds of
+// countdown, every entity ended up with ~600 overlapping sprites,
+// causing the "coin trail" and "blocks don't shrink" artifacts the
+// player saw early in each round.
+function resetTickDeltas(world) {
+    world.newBlocks = []; world.newCoins = [];
+    world.newPentagons = []; world.newHexagonPairs = []; world.newHeptagons = []; world.newOctagons = [];
+    world.newProjectiles = [];
+    world.removedBlockIds = []; world.removedCoinIds = [];
+    world.removedPentagonIds = []; world.removedHexagonPairIds = []; world.removedHeptagonIds = [];
+    world.removedOctagonIds = []; world.removedProjectileIds = [];
+    world.dirtyBlockScales = new Set();
 }
 
 function isSpaceClear(world, x, y, minDist) {
@@ -442,11 +460,8 @@ function makeMatch() {
         hasStarted: false,
         nextIntervalIndex: 0,
         eventsThisTick: [],
-        // First-ever match starts in countdown so even the first joiner gets a
-        // proper grace period. (Rounds after the first start the same way via
-        // resetMatch.)
         roundState: ROUND_COUNTDOWN,
-        countdownEndsAtMs: SIM.COUNTDOWN_SECONDS * 1000, // wall-clock ms target
+        countdownEndsAtMs: SIM.COUNTDOWN_SECONDS * 1000,
         pendingWorldInitForAll: false,
     };
 }
@@ -465,8 +480,6 @@ function queueFlap(match, id) {
     p.flapQueued = true;
 }
 
-// Reset match — called when a ready vote arrives during ROUND_OVER. Wipes
-// the world and starts a fresh COUNTDOWN.
 function resetMatch(match) {
     match.world = makeWorld();
     match.spikeY = SIM.CANVAS_HEIGHT + SIM.SPIKE_INITIAL_OFFSET;
@@ -505,7 +518,7 @@ function anyPlayers(match) {
     return match.players.size > 0;
 }
 
-function resolveBlockBounce(p, block, scale, eventsArr) {
+function resolveBlockBounce(p, block, scale, eventsArr, world) {
     const halfSize = (SIM.BLOCK_RENDER_SIZE * scale) / 2;
     const left = block.x - halfSize, right = block.x + halfSize;
     const top = block.y - halfSize, bottom = block.y + halfSize;
@@ -564,19 +577,18 @@ function resolveCircleBounce(p, cx, cy, cr, eventsArr, stunBoost = false, match 
 function step(match, deltaSeconds) {
     match.elapsedMs += deltaSeconds * 1000;
     match.eventsThisTick = [];
+    // Always reset per-tick world deltas at the top, regardless of which
+    // round-state branch we run. This guarantees that anything generated
+    // during this tick (e.g. countdown's initial chunk) ends up in a fresh
+    // delta and is sent exactly once, not re-broadcast every subsequent
+    // tick of the same state.
+    resetTickDeltas(match.world);
 
-    // ROUND_OVER: pause everything except clock.
     if (match.roundState === ROUND_OVER) {
         return;
     }
 
-    // COUNTDOWN: tick the timer, hold positions. Generate world chunks
-    // around the start position so the visible area is populated. No
-    // gravity, no spike rise, no flap input accepted (server enforces
-    // by only honoring queueFlap during ROUND_RUNNING).
     if (match.roundState === ROUND_COUNTDOWN) {
-        // Generate enough world above the start so when the round starts it
-        // looks fully inhabited rather than streaming in from above.
         const startY = SIM.CANVAS_HEIGHT - SIM.START_Y_OFFSET;
         generateChunks(match.world, startY - SIM.CANVAS_HEIGHT * 1.5, match.elapsedMs);
 
@@ -587,19 +599,8 @@ function step(match, deltaSeconds) {
         return;
     }
 
-    // === ROUND_RUNNING from here ===
     const w = match.world;
-    w.newBlocks = []; w.newCoins = [];
-    w.newPentagons = []; w.newHexagonPairs = []; w.newHeptagons = []; w.newOctagons = [];
-    w.newProjectiles = [];
-    w.removedBlockIds = []; w.removedCoinIds = [];
-    w.removedPentagonIds = []; w.removedHexagonPairIds = []; w.removedHeptagonIds = [];
-    w.removedOctagonIds = []; w.removedProjectileIds = [];
 
-    // hasStarted gate: until someone flaps, gravity & spikes are paused.
-    // (After the countdown system, this is mostly redundant — but it preserves
-    // the behavior of "wait for first input even after countdown" if anyone
-    // takes their finger off the screen by then.)
     if (!match.hasStarted) {
         for (const p of match.players.values()) {
             if (!p.flapQueued) continue;
@@ -750,13 +751,14 @@ function step(match, deltaSeconds) {
         }
 
         for (const block of w.blocks.values()) {
-            if (resolveBlockBounce(p, block, block.scale, match.eventsThisTick)) {
+            if (resolveBlockBounce(p, block, block.scale, match.eventsThisTick, w)) {
                 block.hits++;
                 if (block.hits >= 5) {
                     w.blocks.delete(block.id);
                     w.removedBlockIds.push(block.id);
                 } else {
                     block.scale = 1.0 - (block.hits * 0.2);
+                    w.dirtyBlockScales.add(block.id);
                 }
             }
         }
@@ -811,7 +813,7 @@ function step(match, deltaSeconds) {
 
         for (const proj of w.projectiles.values()) {
             const fakeBlock = { x: proj.x, y: proj.y };
-            if (resolveBlockBounce(p, fakeBlock, proj.scale, match.eventsThisTick)) {
+            if (resolveBlockBounce(p, fakeBlock, proj.scale, match.eventsThisTick, w)) {
                 proj.hits++;
                 if (proj.hits >= 5) {
                     w.projectiles.delete(proj.id);
@@ -913,13 +915,20 @@ function buildSnapshot(match) {
         projectileStates[proj.id] = { x: proj.x, y: proj.y, vx: proj.vx, vy: proj.vy, scale: proj.scale };
     }
 
+    const blockScales = {};
+    if (match.world.dirtyBlockScales) {
+        for (const id of match.world.dirtyBlockScales) {
+            const b = match.world.blocks.get(id);
+            if (b) blockScales[id] = b.scale;
+        }
+    }
+
     const finalScores = [];
     for (const p of match.players.values()) {
         finalScores.push({ id: p.id, score: p.score });
     }
     finalScores.sort((a, b) => b.score - a.score);
 
-    // Countdown remaining ms — only meaningful while in COUNTDOWN, but cheap.
     let countdownRemainingMs = 0;
     if (match.roundState === ROUND_COUNTDOWN) {
         countdownRemainingMs = Math.max(0, match.countdownEndsAtMs - match.elapsedMs);
@@ -950,13 +959,15 @@ function buildSnapshot(match) {
         removedOctagonIds: match.world.removedOctagonIds,
         removedProjectileIds: match.world.removedProjectileIds,
         newSideWallSegments: [],
-        blockScales: undefined,
+        blockScales,
         pentagonStates, hexagonPairStates, heptagonStates, octagonStates, projectileStates,
         events: match.eventsThisTick,
     };
 }
 
 const PORT = 2567;
+// Reverted from 30Hz back to 60Hz — higher precision matters more than
+// the modest mobile bandwidth/CPU savings.
 const TICK_RATE_HZ = 60;
 const TICK_INTERVAL_MS = 1000 / TICK_RATE_HZ;
 const CLIENT_DIR = path.join(__dirname, '..', 'client');
@@ -971,10 +982,6 @@ const match = makeMatch();
 const sessionByWs = new Map();
 const sideWallSeenByWs = new Map();
 
-// Smallest-free-int session naming. With max ~8 concurrent players, we
-// scan existing player IDs to find the smallest unused integer prefix.
-// This means a player who refreshes will likely be re-assigned the same
-// "p1" / "p2" label, and player numbers stay in a tight range.
 function newSessionId(match) {
     const usedNumbers = new Set();
     for (const id of match.players.keys()) {
@@ -1046,11 +1053,6 @@ setInterval(() => {
     }
 
     const snapBase = buildSnapshot(match);
-    const blockScales = {};
-    for (const b of match.world.blocks.values()) {
-        if (b.hits > 0) blockScales[b.id] = b.scale;
-    }
-    snapBase.blockScales = blockScales;
 
     const totalSegs = match.world.sideWallSegments.length;
     for (const ws of wss.clients) {
@@ -1084,6 +1086,6 @@ setInterval(() => {
 }, TICK_INTERVAL_MS);
 
 server.listen(PORT, () => {
-    console.log(`AGISCENDS server listening on http://localhost:${PORT}/`);
+    console.log(`AGISCENDS server listening on http://localhost:${PORT}/ (tick rate: ${TICK_RATE_HZ} Hz)`);
     console.log(`Serving client from: ${CLIENT_DIR}`);
 });
