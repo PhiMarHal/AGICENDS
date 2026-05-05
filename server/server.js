@@ -42,7 +42,10 @@ const SIM = {
     STUN_DURATION_MS: 400,
     STUN_KNOCKBACK_BOOST: 2.0,
 
-    COUNTDOWN_SECONDS: 10,
+    // Countdown shortened to 3s for testing. Bump back up when shipping
+    // (a longer pre-round window gives players time to settle in and read
+    // the leaderboard between rounds).
+    COUNTDOWN_SECONDS: 3,
 
     PENTAGON: {
         startInterval: 5,
@@ -123,19 +126,6 @@ function makeWorld() {
     };
 }
 
-// Reset all per-tick delta arrays. Called at the top of every tick,
-// regardless of round state, so anything generated during this tick
-// goes into a fresh delta and downstream snapshot construction reads
-// exactly what was generated this tick.
-//
-// This was previously only done inside the ROUND_RUNNING branch of
-// step(), which meant during ROUND_COUNTDOWN the same `newBlocks` /
-// `newCoins` populated by the first generateChunks call kept getting
-// re-broadcast every tick. Clients then spawned duplicate sprites for
-// every block and coin once per tick — at 60Hz over 10 seconds of
-// countdown, every entity ended up with ~600 overlapping sprites,
-// causing the "coin trail" and "blocks don't shrink" artifacts the
-// player saw early in each round.
 function resetTickDeltas(world) {
     world.newBlocks = []; world.newCoins = [];
     world.newPentagons = []; world.newHexagonPairs = []; world.newHeptagons = []; world.newOctagons = [];
@@ -577,11 +567,6 @@ function resolveCircleBounce(p, cx, cy, cr, eventsArr, stunBoost = false, match 
 function step(match, deltaSeconds) {
     match.elapsedMs += deltaSeconds * 1000;
     match.eventsThisTick = [];
-    // Always reset per-tick world deltas at the top, regardless of which
-    // round-state branch we run. This guarantees that anything generated
-    // during this tick (e.g. countdown's initial chunk) ends up in a fresh
-    // delta and is sent exactly once, not re-broadcast every subsequent
-    // tick of the same state.
     resetTickDeltas(match.world);
 
     if (match.roundState === ROUND_OVER) {
@@ -966,8 +951,6 @@ function buildSnapshot(match) {
 }
 
 const PORT = 2567;
-// Reverted from 30Hz back to 60Hz — higher precision matters more than
-// the modest mobile bandwidth/CPU savings.
 const TICK_RATE_HZ = 60;
 const TICK_INTERVAL_MS = 1000 / TICK_RATE_HZ;
 const CLIENT_DIR = path.join(__dirname, '..', 'client');
@@ -1042,6 +1025,13 @@ setInterval(() => {
 
     step(match, deltaMs / 1000);
 
+    // World init for everyone (after reset). We send it here BEFORE building
+    // the snapshot. Then we wipe the per-tick deltas: world_init has already
+    // conveyed the full state, so we don't want the same blocks/coins to
+    // appear in this tick's snapshot's `newBlocks` / `newCoins` deltas as
+    // well — that would cause clients to spawn duplicate sprites for every
+    // entity, since `applyWorldInit` builds them from the init payload and
+    // then `applySnapshot` would build them again from the deltas.
     if (match.pendingWorldInitForAll) {
         match.pendingWorldInitForAll = false;
         const initMsg = JSON.stringify(buildWorldInit(match.world));
@@ -1050,6 +1040,9 @@ setInterval(() => {
             ws.send(initMsg);
             sideWallSeenByWs.set(ws, match.world.sideWallSegments.length);
         }
+        // Important: clear deltas so the snapshot built next doesn't re-send
+        // anything we just packed into the world_init.
+        resetTickDeltas(match.world);
     }
 
     const snapBase = buildSnapshot(match);

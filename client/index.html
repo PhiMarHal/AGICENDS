@@ -192,6 +192,12 @@
         const PROXIMITY_TEXT_LINE_HEIGHT = 18;
         const PROXIMITY_X_CLAMP_MARGIN = 50;
 
+        // Skull emoji label for the spikes-line proximity indicator.
+        // Replaces the previous "SPIKES" string for a more flavorful pictogram
+        // that survives at small sizes without leaning on a stylized typography
+        // pass we don't have set up yet.
+        const SPIKES_LABEL = '💀';
+
         const COLORS = {
             background: '#ffffff',
             primary: '#000000',
@@ -274,8 +280,6 @@
                 this.roundState = ROUND_COUNTDOWN;
                 this.gameOverObjs = null;
 
-                // Countdown UI objects (recreated when entering COUNTDOWN, destroyed
-                // when entering RUNNING).
                 this.countdownText = null;
                 this.lastCountdownNumberShown = null;
             }
@@ -294,13 +298,9 @@
                 this.bgMid = this.add.tileSprite(CANVAS_WIDTH / 2, 0, 1024, 2048, 'bg_mid')
                     .setOrigin(0.5, 0).setScrollFactor(0).setDepth(-9).setScale(bgScale);
 
-                // Spike "abyss" container. The black backdrop is enormous so even
-                // when the camera is far above the spike line, you can never see
-                // past the bottom — it always reads as a void.
-                // This does not cause performance issues
                 this.spikeContainer = this.add.container(0, CANVAS_HEIGHT + 50);
                 this.spikeContainer.setDepth(5);
-                const spikeBgHeight = 1000000;
+                const spikeBgHeight = 50000;
                 const spikeBg = this.add.rectangle(0, 45, CANVAS_WIDTH, spikeBgHeight, 0x000000);
                 spikeBg.setOrigin(0, 0);
                 this.spikeContainer.add(spikeBg);
@@ -478,18 +478,12 @@
                     });
             }
 
-            // Generate a cathedral parallax-layer texture. Previously this drew a
-            // white background then walked every pixel converting white to alpha;
-            // that's a 2-million-pixel pass on a midrange phone. Now we leave the
-            // canvas transparent (default) and only fill the gray architecture.
-            // Same visual result, no per-pixel post-processing.
             generateBackgroundTexture(key, opts) {
                 const W = 1024, H = 2048;
                 const center = W / 2;
                 const canvas = document.createElement('canvas');
                 canvas.width = W; canvas.height = H;
                 const ctx = canvas.getContext('2d');
-                // Canvas starts transparent — that's our "background".
                 ctx.fillStyle = opts.fill;
                 ctx.fillRect(center - opts.centerBandW / 2, 0, opts.centerBandW, H);
                 ctx.fillRect(center - opts.towerDist - opts.towerW, 0, opts.towerW, H);
@@ -518,7 +512,6 @@
                 this.textures.addCanvas(key, canvas);
             }
 
-            // === Proximity indicator pool ===
             acquireProximityIndicator() {
                 for (const ind of this.proximityIndicatorPool) {
                     if (!ind.inUse) {
@@ -627,7 +620,7 @@
                     const ind = this.acquireProximityIndicator();
                     const screenX = CANVAS_WIDTH / 2;
                     const distM = Math.round(Math.abs(this.latestSpikeY - myY));
-                    this.placeProximityIndicator(ind, screenX, false, 'SPIKES', distM + 'm');
+                    this.placeProximityIndicator(ind, screenX, false, SPIKES_LABEL, distM + 'm');
                 }
 
                 this.releaseUnusedProximityIndicators();
@@ -849,7 +842,6 @@
                 return buf[buf.length - 1];
             }
 
-            // === Countdown UI ===
             showCountdownUI() {
                 if (this.countdownText) return;
                 this.countdownText = this.add.text(
@@ -872,17 +864,11 @@
 
             updateCountdownUI(remainingMs) {
                 if (!this.countdownText) return;
-                // Display ceil of remaining seconds — 9.6s shows "10", 0.4s shows "1".
-                // When remainingMs reaches 0, we've already transitioned to RUNNING
-                // server-side, so the countdown UI gets hidden by the round-state
-                // transition handler. As a flourish, show "GO!" briefly when we
-                // see the very last second tick down to 0.
                 const number = Math.ceil(remainingMs / 1000);
                 const text = number > 0 ? String(number) : 'GO!';
                 if (text !== this.lastCountdownNumberShown) {
                     this.countdownText.setText(text);
                     this.lastCountdownNumberShown = text;
-                    // Subtle pulse on each new number for visual rhythm.
                     this.countdownText.setScale(1.2);
                     this.tweens.add({
                         targets: this.countdownText, scale: 1.0, duration: 400, ease: 'Quad.easeOut',
@@ -895,7 +881,6 @@
                     this.latestServerTime = snap.tServer;
                 }
 
-                // Track round state transitions.
                 const prevRoundState = this.roundState;
                 if (snap.roundState) this.roundState = snap.roundState;
 
@@ -1110,9 +1095,6 @@
                     for (const ev of snap.events) {
                         if (ev.type === 'coin_collected') this.playCoinFX(ev.x, ev.y);
                         else if (ev.type === 'hit') {
-                            // Particles for any hit (visual context). Camera shake is
-                            // local-player-only — we don't want every other player's
-                            // bumps shaking our screen.
                             this.spawnParticles(ev.x, ev.y);
                             if (ev.playerId === mySessionId) {
                                 this.cameras.main.shake(80, 0.004);
@@ -1264,9 +1246,6 @@
 
             applyFlapToMyState() {
                 if (!this.myState || !this.myState.alive) return false;
-                // Flap input is gated by round state. During COUNTDOWN, input is
-                // ignored regardless of where the click came from — so the READY
-                // button's pointerdown can't bleed into a flap.
                 if (this.roundState !== ROUND_RUNNING) return false;
                 if (this.myServerTarget && this.myServerTarget.stunned) return false;
                 const now = performance.now();
@@ -1431,10 +1410,6 @@
                     this.bgMid.tilePositionY = this.cameras.main.scrollY * 0.3;
                 }
 
-                // Flap input is allowed only during ROUND_RUNNING. During COUNTDOWN
-                // and ROUND_OVER, taps are ignored — including the tap that just
-                // pressed the READY button, since by the time RUNNING starts the
-                // user has lifted their finger.
                 if (!this.gameOverOverlayShown && this.roundState === ROUND_RUNNING) {
                     const pointer = this.input.activePointer;
                     const isHeld = (pointer && pointer.isDown) || (this.spaceKey && this.spaceKey.isDown);
