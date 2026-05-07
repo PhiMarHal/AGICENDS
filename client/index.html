@@ -189,7 +189,7 @@
 
         const PROXIMITY_TRIANGLE_SIZE = 22;
         const PROXIMITY_EDGE_MARGIN = 22;
-        const PROXIMITY_TEXT_LINE_HEIGHT = 18;
+        const PROXIMITY_TEXT_LINE_HEIGHT = 24;
         const PROXIMITY_X_CLAMP_MARGIN = 50;
 
         // Skull emoji label for the spikes-line proximity indicator.
@@ -525,7 +525,7 @@
                 const triangle = this.add.image(0, 0, 'proximity_triangle')
                     .setScrollFactor(0).setDepth(150).setOrigin(0.5, 0.5);
                 const textStyle = {
-                    fontFamily: 'Arial', fontSize: '14px', fontStyle: 'bold',
+                    fontFamily: 'Arial', fontSize: '21px', fontStyle: 'bold',
                     color: '#000000', stroke: '#ffffff', strokeThickness: 3,
                 };
                 const line1 = this.add.text(0, 0, '', textStyle)
@@ -606,7 +606,7 @@
 
                     const ind = this.acquireProximityIndicator();
                     const screenX = this.worldToScreenX(p.x);
-                    const distM = Math.round(Math.abs(p.y - myY));
+                    const distM = Math.floor(Math.abs(p.y - myY) / 100);
                     const distText = distM + 'm';
                     const nameText = id;
                     if (pointsUp) {
@@ -619,7 +619,7 @@
                 if (this.latestSpikeY != null && this.latestSpikeY > bottom) {
                     const ind = this.acquireProximityIndicator();
                     const screenX = CANVAS_WIDTH / 2;
-                    const distM = Math.round(Math.abs(this.latestSpikeY - myY));
+                    const distM = Math.floor(Math.abs(this.latestSpikeY - myY) / 100);
                     this.placeProximityIndicator(ind, screenX, false, SPIKES_LABEL, distM + 'm');
                 }
 
