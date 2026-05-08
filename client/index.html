@@ -606,7 +606,7 @@
 
                     const ind = this.acquireProximityIndicator();
                     const screenX = this.worldToScreenX(p.x);
-                    const distM = Math.floor(Math.abs(p.y - myY) / 100);
+                    const distM = Math.floor(Math.abs(p.y - myY) / 50);
                     const distText = distM + 'm';
                     const nameText = id;
                     if (pointsUp) {
@@ -619,7 +619,7 @@
                 if (this.latestSpikeY != null && this.latestSpikeY > bottom) {
                     const ind = this.acquireProximityIndicator();
                     const screenX = CANVAS_WIDTH / 2;
-                    const distM = Math.floor(Math.abs(this.latestSpikeY - myY) / 100);
+                    const distM = Math.floor(Math.abs(this.latestSpikeY - myY) / 50);
                     this.placeProximityIndicator(ind, screenX, false, SPIKES_LABEL, distM + 'm');
                 }
 
