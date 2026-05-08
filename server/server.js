@@ -22,9 +22,11 @@ const SIM = {
     BLOCK_RENDER_SIZE: 90,
     FLAP_COOLDOWN_MS: 200,
 
-    HAZARD_BASE_SPEED: 120,
-    HAZARD_INCREASE: 20,
-    SPIKE_INITIAL_OFFSET: 50,
+    HAZARD_BASE_SPEED: 80,
+    HAZARD_INCREASE: 5,           // was 20 — halved so speed ramps more gradually
+    HAZARD_CHASE_BONUS: 200,       // extra speed applied when spike is far behind the last alive player
+    HAZARD_CHASE_THRESHOLD: 1200,  // px gap (spikeY - lastAlivePlayerY) that triggers the chase bonus
+    SPIKE_INITIAL_OFFSET: -100,
 
     START_Y_OFFSET: 200,
     PLAYER_RADIUS: 30,
@@ -494,6 +496,17 @@ function highestPlayerY(match) {
     }
     return minY;
 }
+
+// Returns the Y of the lowest alive player (highest Y value = closest to the spike).
+function lowestAlivePlayerY(match) {
+    let maxY = -Infinity;
+    for (const p of match.players.values()) {
+        if (!p.alive) continue;
+        if (p.y > maxY) maxY = p.y;
+    }
+    return maxY;
+}
+
 function altitudeFromY(y) {
     return Math.max(0, Math.floor((SIM.CANVAS_HEIGHT - SIM.START_Y_OFFSET) - y));
 }
@@ -601,7 +614,14 @@ function step(match, deltaSeconds) {
         return;
     }
 
-    match.spikeY -= match.hazardSpeed * deltaSeconds;
+    // Spike movement: apply a large chase bonus when the spike is more than
+    // HAZARD_CHASE_THRESHOLD pixels below the last alive player, so it surges
+    // to close the gap and keeps pressure on even if players climb fast.
+    const lastAliveY = lowestAlivePlayerY(match);
+    const spikeGap = match.spikeY - lastAliveY;
+    const effectiveHazardSpeed = match.hazardSpeed + (spikeGap > SIM.HAZARD_CHASE_THRESHOLD ? SIM.HAZARD_CHASE_BONUS : 0);
+    match.spikeY -= effectiveHazardSpeed * deltaSeconds;
+
     const highY = highestPlayerY(match);
     generateChunks(match.world, highY - SIM.CANVAS_HEIGHT * 1.5, match.elapsedMs);
 
