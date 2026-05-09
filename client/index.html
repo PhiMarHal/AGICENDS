@@ -33,24 +33,131 @@
             margin: 0 auto;
         }
 
-        #status {
+        /* ── Hamburger button ── */
+        #menu-btn {
             position: fixed;
             top: 8px;
             left: 8px;
             color: #fff;
             font-family: monospace;
-            font-size: 12px;
+            font-size: 20px;
+            line-height: 1;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 6px 10px;
+            z-index: 20;
+            cursor: pointer;
+            user-select: none;
+            border-radius: 4px;
+        }
+
+        /* ── Dropdown menu panel ── */
+        #menu-panel {
+            display: none;
+            position: fixed;
+            top: 42px;
+            left: 8px;
+            color: #fff;
+            font-family: monospace;
+            font-size: 13px;
+            background: rgba(0, 0, 0, 0.85);
+            padding: 10px 14px;
+            z-index: 20;
+            border-radius: 4px;
+            min-width: 160px;
+            white-space: nowrap;
+        }
+
+        #menu-panel.open {
+            display: block;
+        }
+
+        /* ── Speaker button ── */
+        #speaker-btn {
+            position: fixed;
+            top: 8px;
+            right: 8px;
+            font-size: 20px;
+            line-height: 1;
+            color: #fff;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 6px 10px;
+            z-index: 20;
+            cursor: pointer;
+            user-select: none;
+            border-radius: 4px;
+        }
+
+        /* Force the emoji to render as pure white */
+        #speaker-btn .icon {
+            display: inline-block;
+            position: relative;
+            filter: brightness(0) invert(1);
+        }
+
+        /* Strikethrough bar when muted */
+        #speaker-btn.muted .icon::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: -4px;
+            right: -4px;
+            height: 2.5px;
+            background: #fff;
+            transform: translateY(-50%) rotate(45deg);
+            pointer-events: none;
+        }
+
+        /* ── Top scorer (bottom left) ── */
+        #top-scorer {
+            position: fixed;
+            bottom: 8px;
+            left: 8px;
+            color: #fff;
+            font-family: monospace;
+            font-size: 18px;
             background: rgba(0, 0, 0, 0.6);
             padding: 4px 8px;
             z-index: 10;
             pointer-events: none;
+            border-radius: 4px;
+            display: none;
+        }
+
+        /* ── Second scorer (bottom right) ── */
+        #second-scorer {
+            position: fixed;
+            bottom: 8px;
+            right: 8px;
+            color: #fff;
+            font-family: monospace;
+            font-size: 18px;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 4px 8px;
+            z-index: 10;
+            pointer-events: none;
+            border-radius: 4px;
+            display: none;
         }
     </style>
 </head>
 
 <body>
     <div id="game-container"></div>
-    <div id="status">connecting...</div>
+
+    <!-- Top left: hamburger + menu -->
+    <div id="menu-btn">☰</div>
+    <div id="menu-panel">
+        <span id="menu-player-name">you are …</span>
+    </div>
+
+    <!-- Top right: speaker toggle -->
+    <div id="speaker-btn"><span class="icon">🔊</span></div>
+
+    <!-- Bottom left: top scorer -->
+    <div id="top-scorer"></div>
+
+    <!-- Bottom right: second scorer -->
+    <div id="second-scorer"></div>
 
     <script>
         // ========================================================================
@@ -140,6 +247,37 @@
         });
 
         // ========================================================================
+        // UI controls: hamburger menu + speaker toggle
+        // ========================================================================
+        const menuBtn = document.getElementById('menu-btn');
+        const menuPanel = document.getElementById('menu-panel');
+        const speakerBtn = document.getElementById('speaker-btn');
+        const topScorerEl = document.getElementById('top-scorer');
+        const secondScorerEl = document.getElementById('second-scorer');
+
+        menuBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            menuPanel.classList.toggle('open');
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!menuPanel.contains(e.target) && e.target !== menuBtn) {
+                menuPanel.classList.remove('open');
+            }
+        });
+
+        speakerBtn.addEventListener('click', () => {
+            musicMuted = !musicMuted;
+            if (musicAudioElement) {
+                musicAudioElement.muted = musicMuted;
+                if (!musicMuted && musicStarted) {
+                    musicAudioElement.play().catch(() => { });
+                }
+            }
+            speakerBtn.classList.toggle('muted', musicMuted);
+        });
+
+        // ========================================================================
         // Game constants
         // ========================================================================
         const CANVAS_WIDTH = 720;
@@ -205,8 +343,8 @@
             hazard: '#000000',
         };
 
-        const statusEl = document.getElementById('status');
-        function setStatus(t) { statusEl.textContent = t; }
+        // Status is now silent (UI elements handle display)
+        function setStatus(t) { /* no-op: status displayed via DOM elements */ }
 
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = wsProtocol + '//' + window.location.host;
@@ -226,7 +364,8 @@
                 try { msg = JSON.parse(event.data); } catch { return; }
                 if (msg.type === 'welcome') {
                     mySessionId = msg.sessionId;
-                    setStatus('you are ' + mySessionId);
+                    // Update the hamburger menu player name
+                    document.getElementById('menu-player-name').textContent = 'you are ' + mySessionId;
                 } else if (msg.type === 'world_init') {
                     if (sceneReady && window.__scene) window.__scene.applyWorldInit(msg);
                     else pendingWorldInit = msg;
@@ -876,6 +1015,29 @@
                 }
             }
 
+            updateTopScorer(players) {
+                // Collect and sort all player scores descending
+                const scores = [];
+                for (const id in players) {
+                    scores.push({ id, score: players[id].score || 0 });
+                }
+                scores.sort((a, b) => b.score - a.score);
+
+                if (scores.length > 0 && scores[0].score > 0) {
+                    topScorerEl.textContent = scores[0].id + ' - ' + scores[0].score;
+                    topScorerEl.style.display = 'block';
+                } else {
+                    topScorerEl.style.display = 'none';
+                }
+
+                if (scores.length > 1 && scores[1].score > 0) {
+                    secondScorerEl.textContent = scores[1].id + ' - ' + scores[1].score;
+                    secondScorerEl.style.display = 'block';
+                } else {
+                    secondScorerEl.style.display = 'none';
+                }
+            }
+
             applySnapshot(snap) {
                 if (snap.tServer != null && snap.tServer > this.latestServerTime) {
                     this.latestServerTime = snap.tServer;
@@ -1072,6 +1234,11 @@
                     } else {
                         this.pushInterpSample(id, snap.tServer || 0, p);
                     }
+                }
+
+                // Update top-scorer display every snapshot
+                if (snap.players) {
+                    this.updateTopScorer(snap.players);
                 }
 
                 for (const [id, v] of this.playerVisuals) {
