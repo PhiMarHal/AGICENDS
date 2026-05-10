@@ -430,6 +430,7 @@
                 this.spectatingText = null;
                 this.isSpectating = false;
                 this.spectatorCameraY = null;
+                this.countdownReadySet = new Set();
             }
 
             create() {
@@ -850,6 +851,7 @@
                 this.hideSpectatingUI();
                 this.isSpectating = false;
                 this.spectatorCameraY = null;
+                this.countdownReadySet = new Set();
             }
 
             applyWorldInit(msg) {
@@ -993,29 +995,32 @@
                 ).setOrigin(0.5).setScrollFactor(0).setDepth(150);
                 this.lastCountdownNumberShown = null;
 
-                this.countdownReadyText = this.add.text(
-                    CANVAS_WIDTH / 2, 640, '0 players ready',
-                    {
-                        fontFamily: 'Arial', fontSize: '28px', fontStyle: 'bold',
-                        color: '#000000', stroke: '#ffffff', strokeThickness: 5
-                    }
-                ).setOrigin(0.5).setScrollFactor(0).setDepth(150);
+                // Notification slot — floating "[name] joined" texts spawn here
+                this.countdownNotifY = 640;
 
+                // TAP TO JOIN — big button at the bottom, triggered by tap anywhere or spacebar
                 this.countdownJoinButton = this.add.rectangle(
-                    CANVAS_WIDTH / 2, 730, 220, 60, 0x000000
-                ).setScrollFactor(0).setDepth(151).setInteractive({ useHandCursor: true });
+                    CANVAS_WIDTH / 2, CANVAS_HEIGHT - 160, 400, 100, 0x000000
+                ).setScrollFactor(0).setDepth(151);
 
                 this.countdownJoinButtonText = this.add.text(
-                    CANVAS_WIDTH / 2, 730, 'JOIN ROUND',
-                    { fontFamily: 'Arial', fontSize: '26px', fontStyle: 'bold', color: '#ffffff' }
+                    CANVAS_WIDTH / 2, CANVAS_HEIGHT - 160, 'TAP TO JOIN',
+                    { fontFamily: 'Arial', fontSize: '52px', fontStyle: 'bold', color: '#ffffff' }
                 ).setOrigin(0.5).setScrollFactor(0).setDepth(152);
 
-                this.countdownJoinButton.on('pointerdown', () => {
+                // One-shot handler shared by pointer and spacebar
+                this._doJoin = () => {
+                    if (!this.countdownJoinButton) return;  // already joined
                     sendReady();
-                    this.countdownJoinButton.fillColor = 0x444444;
-                    this.countdownJoinButton.disableInteractive();
-                    this.countdownJoinButtonText.setText('JOINED ✓');
-                });
+                    if (!musicStarted) startMusic();
+                    // Hide the TAP TO JOIN prompt immediately
+                    if (this.countdownJoinButton) { this.countdownJoinButton.destroy(); this.countdownJoinButton = null; }
+                    if (this.countdownJoinButtonText) { this.countdownJoinButtonText.destroy(); this.countdownJoinButtonText = null; }
+                    this.input.off('pointerdown', this._doJoin, this);
+                };
+
+                this.input.on('pointerdown', this._doJoin, this);
+                if (this.spaceKey) this.spaceKey.on('down', this._doJoin, this);
             }
 
             hideCountdownUI() {
@@ -1027,9 +1032,14 @@
                 if (this.countdownReadyText) { this.countdownReadyText.destroy(); this.countdownReadyText = null; }
                 if (this.countdownJoinButton) { this.countdownJoinButton.destroy(); this.countdownJoinButton = null; }
                 if (this.countdownJoinButtonText) { this.countdownJoinButtonText.destroy(); this.countdownJoinButtonText = null; }
+                if (this._doJoin) {
+                    this.input.off('pointerdown', this._doJoin, this);
+                    if (this.spaceKey) this.spaceKey.off('down', this._doJoin, this);
+                    this._doJoin = null;
+                }
             }
 
-            updateCountdownUI(remainingMs, readyCount) {
+            updateCountdownUI(remainingMs) {
                 if (!this.countdownText) return;
                 const number = Math.ceil(remainingMs / 1000);
                 const text = number > 0 ? String(number) : 'GO!';
@@ -1041,10 +1051,30 @@
                         targets: this.countdownText, scale: 1.0, duration: 400, ease: 'Quad.easeOut',
                     });
                 }
-                if (this.countdownReadyText) {
-                    const label = (readyCount || 0) === 1 ? '1 player ready' : `${readyCount || 0} players ready`;
-                    this.countdownReadyText.setText(label);
-                }
+            }
+
+            // Floating "[name] joined" notification that fades upward after 1 s.
+            showJoinedNotification(playerName) {
+                if (!this.countdownText) return;  // not in countdown UI
+                const t = this.add.text(
+                    CANVAS_WIDTH / 2, this.countdownNotifY || 640,
+                    playerName + ' joined',
+                    {
+                        fontFamily: 'Arial', fontSize: '28px', fontStyle: 'bold',
+                        color: '#000000', stroke: '#ffffff', strokeThickness: 5
+                    }
+                ).setOrigin(0.5).setScrollFactor(0).setDepth(155).setAlpha(1);
+
+                // Hold 1 s, then float up and fade over 1 s
+                this.tweens.add({
+                    targets: t,
+                    y: t.y - 80,
+                    alpha: 0,
+                    delay: 1000,
+                    duration: 1000,
+                    ease: 'Quad.easeIn',
+                    onComplete: () => t.destroy(),
+                });
             }
 
             // ── Waiting-lobby UI (shown when roundState === ROUND_WAITING) ──────────
@@ -1057,23 +1087,17 @@
                 ).setScrollFactor(0).setDepth(200);
 
                 objs.title = this.add.text(
-                    CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 80, 'WAITING FOR PLAYERS',
-                    { fontFamily: 'Arial', fontSize: '38px', fontStyle: 'bold', color: '#ffffff' }
-                ).setOrigin(0.5).setScrollFactor(0).setDepth(201);
-
-                objs.subtitle = this.add.text(
-                    CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 24,
-                    'click READY to start a 10-second lobby',
-                    { fontFamily: 'Arial', fontSize: '22px', color: '#cccccc' }
+                    CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 80, 'THE CITADEL AWAITS',
+                    { fontFamily: 'Arial', fontSize: '46px', fontStyle: 'bold', color: '#ffffff' }
                 ).setOrigin(0.5).setScrollFactor(0).setDepth(201);
 
                 objs.button = this.add.rectangle(
-                    CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 60, 220, 64, 0xffffff
+                    CANVAS_WIDTH / 2, CANVAS_HEIGHT - 160, 280, 70, 0xffffff
                 ).setScrollFactor(0).setDepth(201).setInteractive({ useHandCursor: true });
 
                 objs.buttonText = this.add.text(
-                    CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 60, 'READY',
-                    { fontFamily: 'Arial', fontSize: '30px', fontStyle: 'bold', color: '#000000' }
+                    CANVAS_WIDTH / 2, CANVAS_HEIGHT - 160, 'READY',
+                    { fontFamily: 'Arial', fontSize: '32px', fontStyle: 'bold', color: '#000000' }
                 ).setOrigin(0.5).setScrollFactor(0).setDepth(202);
 
                 objs.button.on('pointerdown', () => {
@@ -1092,7 +1116,6 @@
                 const o = this.waitingUI;
                 if (o.overlay) o.overlay.destroy();
                 if (o.title) o.title.destroy();
-                if (o.subtitle) o.subtitle.destroy();
                 if (o.button) o.button.destroy();
                 if (o.buttonText) o.buttonText.destroy();
                 this.waitingUI = null;
@@ -1164,12 +1187,27 @@
 
                 if (this.roundState === ROUND_COUNTDOWN) {
                     this.showCountdownUI();
-                    this.updateCountdownUI(snap.countdownRemainingMs || 0, snap.readyCount || 0);
-                    // Dim the JOIN button if this client is already in the ready set
-                    if (snap.myReady && this.countdownJoinButton) {
-                        this.countdownJoinButton.fillColor = 0x444444;
-                        this.countdownJoinButton.disableInteractive();
-                        if (this.countdownJoinButtonText) this.countdownJoinButtonText.setText('JOINED ✓');
+                    this.updateCountdownUI(snap.countdownRemainingMs || 0);
+
+                    // Detect newly-joined players and show "[name] joined" notifications
+                    if (snap.readyPlayerIds) {
+                        for (const pid of snap.readyPlayerIds) {
+                            if (!this.countdownReadySet.has(pid)) {
+                                this.countdownReadySet.add(pid);
+                                this.showJoinedNotification(pid);
+                            }
+                        }
+                    }
+
+                    // Hide TAP TO JOIN once this client has joined
+                    if (snap.myReady) {
+                        if (this.countdownJoinButton) { this.countdownJoinButton.destroy(); this.countdownJoinButton = null; }
+                        if (this.countdownJoinButtonText) { this.countdownJoinButtonText.destroy(); this.countdownJoinButtonText = null; }
+                        if (this._doJoin) {
+                            this.input.off('pointerdown', this._doJoin, this);
+                            if (this.spaceKey) this.spaceKey.off('down', this._doJoin, this);
+                            this._doJoin = null;
+                        }
                     }
                 } else if (prevRoundState === ROUND_COUNTDOWN && this.roundState !== ROUND_COUNTDOWN) {
                     this.hideCountdownUI();

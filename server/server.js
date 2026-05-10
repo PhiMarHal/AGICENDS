@@ -1022,6 +1022,7 @@ function buildSnapshot(match) {
         roundState: match.roundState,
         countdownRemainingMs,
         readyCount: match.readyPlayers.size,
+        readyPlayerIds: Array.from(match.readyPlayers),
         leadingPlayerY,
         finalScores,
         players,
