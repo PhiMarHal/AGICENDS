@@ -297,7 +297,7 @@
             MAX_VX: 800, MAX_VY: 2000,
             WALL_THICKNESS: 35,
             FLAP_COOLDOWN_MS: 200,
-            START_Y_OFFSET: 200,
+            START_Y_OFFSET: 540,  // = CANVAS_HEIGHT / 2; players spawn at vertical centre
             PLAYER_RADIUS: 30,
             PLAYER_BOUNCE: 2.0,
             STUN_DURATION_MS: 400,
@@ -307,6 +307,7 @@
             OCTAGON_SIZE: 135,
         };
 
+        const ROUND_WAITING = 'waiting';
         const ROUND_COUNTDOWN = 'countdown';
         const ROUND_RUNNING = 'running';
         const ROUND_OVER = 'round_over';
@@ -416,11 +417,19 @@
 
                 this.proximityIndicatorPool = [];
 
-                this.roundState = ROUND_COUNTDOWN;
+                this.roundState = ROUND_WAITING;
                 this.gameOverObjs = null;
 
                 this.countdownText = null;
                 this.lastCountdownNumberShown = null;
+                this.countdownReadyText = null;
+                this.countdownJoinButton = null;
+                this.countdownJoinButtonText = null;
+
+                this.waitingUI = null;
+                this.spectatingText = null;
+                this.isSpectating = false;
+                this.spectatorCameraY = null;
             }
 
             create() {
@@ -457,11 +466,6 @@
                     fontFamily: 'Arial', fontSize: '56px', fontStyle: 'bold',
                     color: COLORS.primary, stroke: '#ffffff', strokeThickness: 6
                 }).setOrigin(0.5).setScrollFactor(0).setDepth(100);
-
-                this.tutorialText = this.add.text(
-                    CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 100, 'TAP TO FLAP',
-                    { fontFamily: 'Arial', fontSize: '32px', color: COLORS.primary }
-                ).setOrigin(0.5).setDepth(20).setScrollFactor(0);
 
                 this.spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
 
@@ -842,13 +846,10 @@
                 this.hideGameOverUI();
                 this.gameOverOverlayShown = false;
                 this.hideCountdownUI();
-
-                if (this.tutorialText && !this.tutorialText.active) {
-                    this.tutorialText = this.add.text(
-                        CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 100, 'TAP TO FLAP',
-                        { fontFamily: 'Arial', fontSize: '32px', color: COLORS.primary }
-                    ).setOrigin(0.5).setDepth(20).setScrollFactor(0);
-                }
+                this.hideWaitingUI();
+                this.hideSpectatingUI();
+                this.isSpectating = false;
+                this.spectatorCameraY = null;
             }
 
             applyWorldInit(msg) {
@@ -984,13 +985,37 @@
             showCountdownUI() {
                 if (this.countdownText) return;
                 this.countdownText = this.add.text(
-                    CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, '',
+                    CANVAS_WIDTH / 2, 440, '',
                     {
                         fontFamily: 'Arial', fontSize: '180px', fontStyle: 'bold',
                         color: '#000000', stroke: '#ffffff', strokeThickness: 12
                     }
                 ).setOrigin(0.5).setScrollFactor(0).setDepth(150);
                 this.lastCountdownNumberShown = null;
+
+                this.countdownReadyText = this.add.text(
+                    CANVAS_WIDTH / 2, 640, '0 players ready',
+                    {
+                        fontFamily: 'Arial', fontSize: '28px', fontStyle: 'bold',
+                        color: '#000000', stroke: '#ffffff', strokeThickness: 5
+                    }
+                ).setOrigin(0.5).setScrollFactor(0).setDepth(150);
+
+                this.countdownJoinButton = this.add.rectangle(
+                    CANVAS_WIDTH / 2, 730, 220, 60, 0x000000
+                ).setScrollFactor(0).setDepth(151).setInteractive({ useHandCursor: true });
+
+                this.countdownJoinButtonText = this.add.text(
+                    CANVAS_WIDTH / 2, 730, 'JOIN ROUND',
+                    { fontFamily: 'Arial', fontSize: '26px', fontStyle: 'bold', color: '#ffffff' }
+                ).setOrigin(0.5).setScrollFactor(0).setDepth(152);
+
+                this.countdownJoinButton.on('pointerdown', () => {
+                    sendReady();
+                    this.countdownJoinButton.fillColor = 0x444444;
+                    this.countdownJoinButton.disableInteractive();
+                    this.countdownJoinButtonText.setText('JOINED ✓');
+                });
             }
 
             hideCountdownUI() {
@@ -999,9 +1024,12 @@
                     this.countdownText = null;
                 }
                 this.lastCountdownNumberShown = null;
+                if (this.countdownReadyText) { this.countdownReadyText.destroy(); this.countdownReadyText = null; }
+                if (this.countdownJoinButton) { this.countdownJoinButton.destroy(); this.countdownJoinButton = null; }
+                if (this.countdownJoinButtonText) { this.countdownJoinButtonText.destroy(); this.countdownJoinButtonText = null; }
             }
 
-            updateCountdownUI(remainingMs) {
+            updateCountdownUI(remainingMs, readyCount) {
                 if (!this.countdownText) return;
                 const number = Math.ceil(remainingMs / 1000);
                 const text = number > 0 ? String(number) : 'GO!';
@@ -1013,12 +1041,85 @@
                         targets: this.countdownText, scale: 1.0, duration: 400, ease: 'Quad.easeOut',
                     });
                 }
+                if (this.countdownReadyText) {
+                    const label = (readyCount || 0) === 1 ? '1 player ready' : `${readyCount || 0} players ready`;
+                    this.countdownReadyText.setText(label);
+                }
+            }
+
+            // ── Waiting-lobby UI (shown when roundState === ROUND_WAITING) ──────────
+
+            showWaitingUI() {
+                if (this.waitingUI) return;
+                const objs = {};
+                objs.overlay = this.add.rectangle(
+                    CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, CANVAS_WIDTH, CANVAS_HEIGHT, 0x000000, 0.72
+                ).setScrollFactor(0).setDepth(200);
+
+                objs.title = this.add.text(
+                    CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 80, 'WAITING FOR PLAYERS',
+                    { fontFamily: 'Arial', fontSize: '38px', fontStyle: 'bold', color: '#ffffff' }
+                ).setOrigin(0.5).setScrollFactor(0).setDepth(201);
+
+                objs.subtitle = this.add.text(
+                    CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 24,
+                    'click READY to start a 10-second lobby',
+                    { fontFamily: 'Arial', fontSize: '22px', color: '#cccccc' }
+                ).setOrigin(0.5).setScrollFactor(0).setDepth(201);
+
+                objs.button = this.add.rectangle(
+                    CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 60, 220, 64, 0xffffff
+                ).setScrollFactor(0).setDepth(201).setInteractive({ useHandCursor: true });
+
+                objs.buttonText = this.add.text(
+                    CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 60, 'READY',
+                    { fontFamily: 'Arial', fontSize: '30px', fontStyle: 'bold', color: '#000000' }
+                ).setOrigin(0.5).setScrollFactor(0).setDepth(202);
+
+                objs.button.on('pointerdown', () => {
+                    sendReady();
+                    objs.buttonText.setText('WAITING...');
+                    objs.button.fillColor = 0x888888;
+                    objs.button.disableInteractive();
+                    if (!musicStarted) startMusic();
+                });
+
+                this.waitingUI = objs;
+            }
+
+            hideWaitingUI() {
+                if (!this.waitingUI) return;
+                const o = this.waitingUI;
+                if (o.overlay) o.overlay.destroy();
+                if (o.title) o.title.destroy();
+                if (o.subtitle) o.subtitle.destroy();
+                if (o.button) o.button.destroy();
+                if (o.buttonText) o.buttonText.destroy();
+                this.waitingUI = null;
+            }
+
+            // ── Spectating banner (shown when player is watching but not in-round) ─
+
+            showSpectatingUI() {
+                if (this.spectatingText) return;
+                this.spectatingText = this.add.text(
+                    CANVAS_WIDTH / 2, 20, '👁 SPECTATING',
+                    {
+                        fontFamily: 'Arial', fontSize: '24px', fontStyle: 'bold',
+                        color: '#ffffff', stroke: '#000000', strokeThickness: 5
+                    }
+                ).setOrigin(0.5, 0).setScrollFactor(0).setDepth(100);
+            }
+
+            hideSpectatingUI() {
+                if (this.spectatingText) { this.spectatingText.destroy(); this.spectatingText = null; }
             }
 
             updateTopScorer(players) {
-                // Collect and sort all player scores descending
+                // Collect and sort all in-round player scores descending
                 const scores = [];
                 for (const id in players) {
+                    if (!players[id].inRound) continue;  // skip spectators
                     scores.push({ id, score: players[id].score || 0 });
                 }
                 scores.sort((a, b) => b.score - a.score);
@@ -1054,11 +1155,35 @@
                     this.hideGameOverUI();
                 }
 
+                // ── ROUND_WAITING ──────────────────────────────────────────────────
+                if (this.roundState === ROUND_WAITING) {
+                    this.showWaitingUI();
+                } else if (prevRoundState === ROUND_WAITING && this.roundState !== ROUND_WAITING) {
+                    this.hideWaitingUI();
+                }
+
                 if (this.roundState === ROUND_COUNTDOWN) {
                     this.showCountdownUI();
-                    this.updateCountdownUI(snap.countdownRemainingMs || 0);
+                    this.updateCountdownUI(snap.countdownRemainingMs || 0, snap.readyCount || 0);
+                    // Dim the JOIN button if this client is already in the ready set
+                    if (snap.myReady && this.countdownJoinButton) {
+                        this.countdownJoinButton.fillColor = 0x444444;
+                        this.countdownJoinButton.disableInteractive();
+                        if (this.countdownJoinButtonText) this.countdownJoinButtonText.setText('JOINED ✓');
+                    }
                 } else if (prevRoundState === ROUND_COUNTDOWN && this.roundState !== ROUND_COUNTDOWN) {
                     this.hideCountdownUI();
+                }
+
+                // ── Spectating detection ───────────────────────────────────────────
+                const mySnapData = snap.players ? snap.players[mySessionId] : null;
+                if (mySnapData && !mySnapData.inRound && this.roundState === ROUND_RUNNING && !this.isSpectating) {
+                    this.isSpectating = true;
+                    this.cameras.main.stopFollow();
+                    this.showSpectatingUI();
+                }
+                if (this.isSpectating && snap.leadingPlayerY != null) {
+                    this.spectatorCameraY = snap.leadingPlayerY;
                 }
 
                 if (snap.newSideWallSegments) for (const seg of snap.newSideWallSegments) this.spawnSideWallSegment(seg);
@@ -1197,7 +1322,9 @@
                         this.playerVisuals.set(id, v);
                         if (isMe) {
                             this.cameraTarget = v.sprite;
-                            this.cameras.main.startFollow(v.sprite, true, 0.1, 0.1);
+                            if (!this.isSpectating) {
+                                this.cameras.main.startFollow(v.sprite, true, 0.1, 0.1);
+                            }
                         }
                     }
 
@@ -1252,10 +1379,6 @@
                             this.cameras.main.stopFollow();
                         }
                     }
-                }
-
-                if (snap.hasStarted && this.tutorialText && this.tutorialText.active) {
-                    this.tutorialText.destroy();
                 }
 
                 if (snap.events) {
@@ -1432,6 +1555,7 @@
                 if (!this.myState || !this.myState.alive) return;
                 if (this.myServerTarget && !this.myServerTarget.hasStarted) return;
                 if (this.roundState !== ROUND_RUNNING) return;
+                if (this.isSpectating) return;
 
                 const s = this.myState;
                 s.vy += SIM.GRAVITY * deltaSeconds;
@@ -1577,7 +1701,13 @@
                     this.bgMid.tilePositionY = this.cameras.main.scrollY * 0.3;
                 }
 
-                if (!this.gameOverOverlayShown && this.roundState === ROUND_RUNNING) {
+                // Spectator camera: smoothly track the leading player
+                if (this.isSpectating && this.spectatorCameraY != null) {
+                    const targetScrollY = this.spectatorCameraY - CANVAS_HEIGHT / 2;
+                    this.cameras.main.scrollY += (targetScrollY - this.cameras.main.scrollY) * 0.05;
+                }
+
+                if (!this.gameOverOverlayShown && this.roundState === ROUND_RUNNING && !this.isSpectating) {
                     const pointer = this.input.activePointer;
                     const isHeld = (pointer && pointer.isDown) || (this.spaceKey && this.spaceKey.isDown);
                     if (isHeld) {

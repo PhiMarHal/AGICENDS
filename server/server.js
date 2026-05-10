@@ -23,12 +23,15 @@ const SIM = {
     FLAP_COOLDOWN_MS: 200,
 
     HAZARD_BASE_SPEED: 80,
-    HAZARD_INCREASE: 5,           // was 20 — halved so speed ramps more gradually
-    HAZARD_CHASE_BONUS: 200,       // extra speed applied when spike is far behind the last alive player
-    HAZARD_CHASE_THRESHOLD: 1200,  // px gap (spikeY - lastAlivePlayerY) that triggers the chase bonus
+    HAZARD_INCREASE: 5,
+    HAZARD_CHASE_BONUS: 200,
+    HAZARD_CHASE_THRESHOLD: 1200,
     SPIKE_INITIAL_OFFSET: -100,
 
-    START_Y_OFFSET: 200,
+    // Players spawn at vertical center of the canvas — no singleplayer bottom-bias.
+    // World generation also anchors from this point upward.
+    START_Y_OFFSET: 540,           // was 200; now = CANVAS_HEIGHT / 2
+
     PLAYER_RADIUS: 30,
     PLAYER_BOUNCE: 2.0,
 
@@ -44,10 +47,15 @@ const SIM = {
     STUN_DURATION_MS: 400,
     STUN_KNOCKBACK_BOOST: 2.0,
 
-    // Countdown shortened to 3s for testing. Bump back up when shipping
-    // (a longer pre-round window gives players time to settle in and read
-    // the leaderboard between rounds).
-    COUNTDOWN_SECONDS: 3,
+    // Countdown seen by players once they click READY (10 s lobby window).
+    READY_COUNTDOWN_SECONDS: 10,
+
+    // Maximum participants per round. Extra connected clients spectate.
+    MAX_ROUND_PLAYERS: 8,
+
+    // Hard cap on simultaneous WebSocket connections (players + spectators).
+    // Connections beyond this are rejected immediately.
+    MAX_CONNECTIONS: 50,
 
     PENTAGON: {
         startInterval: 5,
@@ -85,7 +93,8 @@ const SIM = {
     },
 };
 
-const ROUND_COUNTDOWN = 'countdown';
+const ROUND_WAITING = 'waiting';     // idle: waiting for first READY press
+const ROUND_COUNTDOWN = 'countdown';   // 10-s lobby window after first READY
 const ROUND_RUNNING = 'running';
 const ROUND_OVER = 'round_over';
 
@@ -105,6 +114,11 @@ function newId(prefix) { return prefix + (nextEntityId++); }
 function makeWorld() {
     const intervalAltitudes = [];
     for (let n = 1; n <= 100; n++) intervalAltitudes.push(n * SIM.BASE_INTERVAL);
+    // lastChunkY must sit *below* the visible canvas so generateChunks covers
+    // the full viewport on its first call. Using CANVAS_HEIGHT + 200 matches
+    // the pre-refactor value and ensures wall segments exist from the bottom of
+    // the screen all the way up through the player-spawn area.
+    const startY = SIM.CANVAS_HEIGHT - SIM.START_Y_OFFSET;
     return {
         blocks: new Map(),
         coins: new Map(),
@@ -116,7 +130,7 @@ function makeWorld() {
         sideWallSegments: [],
         intervalAltitudes,
         generatedIntervalBarriers: new Set(),
-        lastChunkY: SIM.CANVAS_HEIGHT + 200,
+        lastChunkY: SIM.CANVAS_HEIGHT + 200,      // below screen → walls cover full viewport
         highestGeneratedY: SIM.CANVAS_HEIGHT + 200,
         newBlocks: [], newCoins: [],
         newPentagons: [], newHexagonPairs: [], newHeptagons: [], newOctagons: [],
@@ -139,6 +153,11 @@ function resetTickDeltas(world) {
 }
 
 function isSpaceClear(world, x, y, minDist) {
+    const startY = SIM.CANVAS_HEIGHT - SIM.START_Y_OFFSET;
+
+    // Keep a clear launch zone: no random blocks within EXCLUSION_RADIUS above spawn.
+    if (y >= startY - SIM.EXCLUSION_RADIUS) return false;
+
     const minDistSq = minDist * minDist;
     for (const b of world.blocks.values()) {
         const dx = x - b.x, dy = y - b.y;
@@ -164,7 +183,6 @@ function isSpaceClear(world, x, y, minDist) {
         const d = minDist + SIM.OCTAGON.size / 2;
         if (dx * dx + dy * dy < d * d) return false;
     }
-    const startY = SIM.CANVAS_HEIGHT - SIM.START_Y_OFFSET;
     for (const intervalAlt of world.intervalAltitudes) {
         const intervalY = startY - intervalAlt;
         if (Math.abs(y - intervalY) < SIM.EXCLUSION_RADIUS) return false;
@@ -280,6 +298,14 @@ function spawnFullRowOfBlocks(world, y) {
     for (let i = 0; i < blocksCount; i++) {
         spawnBlock(world, startX + i * (blockSize + gap), y);
     }
+}
+
+// Spawn the row of blocks players land on at the very start of each round.
+// Placed 160 px below the spawn Y so players have a soft landing without
+// immediately being on top of the platform.
+function spawnStartingPlatform(world) {
+    const startY = SIM.CANVAS_HEIGHT - SIM.START_Y_OFFSET;
+    spawnFullRowOfBlocks(world, startY + 160);
 }
 
 function spawnIntervalCoinColumns(world, baseY, intervalNumber) {
@@ -425,6 +451,7 @@ function makePlayer(id) {
         flapQueued: false,
         nextFlapDirection: 1,
         lastStunTime: -Infinity,
+        inRound: false,   // true only for players who clicked READY before countdown ended
     };
 }
 
@@ -440,21 +467,25 @@ function resetPlayer(p) {
     p.flapQueued = false;
     p.nextFlapDirection = 1;
     p.lastStunTime = -Infinity;
+    p.inRound = false;
 }
 
 function makeMatch() {
+    const world = makeWorld();
+    spawnStartingPlatform(world);
     return {
         players: new Map(),
-        world: makeWorld(),
+        world,
         spikeY: SIM.CANVAS_HEIGHT + SIM.SPIKE_INITIAL_OFFSET,
         hazardSpeed: SIM.HAZARD_BASE_SPEED,
         elapsedMs: 0,
         hasStarted: false,
         nextIntervalIndex: 0,
         eventsThisTick: [],
-        roundState: ROUND_COUNTDOWN,
-        countdownEndsAtMs: SIM.COUNTDOWN_SECONDS * 1000,
+        roundState: ROUND_WAITING,
+        countdownEndsAtMs: Infinity,
         pendingWorldInitForAll: false,
+        readyPlayers: new Set(),   // session IDs that clicked READY for this round
     };
 }
 
@@ -464,44 +495,57 @@ function addPlayer(match, id) {
     return p;
 }
 function removePlayer(match, id) { match.players.delete(id); }
+
 function queueFlap(match, id) {
     if (match.roundState !== ROUND_RUNNING) return;
     const p = match.players.get(id);
-    if (!p || !p.alive) return;
+    if (!p || !p.alive || !p.inRound) return;
     if (match.elapsedMs - p.lastStunTime < SIM.STUN_DURATION_MS) return;
     p.flapQueued = true;
 }
 
 function resetMatch(match) {
-    match.world = makeWorld();
+    const world = makeWorld();
+    spawnStartingPlatform(world);
+    match.world = world;
     match.spikeY = SIM.CANVAS_HEIGHT + SIM.SPIKE_INITIAL_OFFSET;
     match.hazardSpeed = SIM.HAZARD_BASE_SPEED;
     match.elapsedMs = 0;
     match.hasStarted = false;
     match.nextIntervalIndex = 0;
     match.eventsThisTick = [];
-    match.roundState = ROUND_COUNTDOWN;
-    match.countdownEndsAtMs = SIM.COUNTDOWN_SECONDS * 1000;
+    match.roundState = ROUND_WAITING;
+    match.countdownEndsAtMs = Infinity;
+    match.readyPlayers = new Set();
     for (const p of match.players.values()) {
         resetPlayer(p);
     }
     match.pendingWorldInitForAll = true;
 }
 
+// Start a 10-second lobby countdown. The caller has already reset the match
+// (world rebuilt, elapsedMs = 0). This just sets the window and registers the
+// first ready player.
+function beginCountdown(match, firstSessionId) {
+    match.roundState = ROUND_COUNTDOWN;
+    match.countdownEndsAtMs = match.elapsedMs + SIM.READY_COUNTDOWN_SECONDS * 1000;
+    match.readyPlayers.add(firstSessionId);
+    console.log(`[server] ${firstSessionId} clicked READY — ${SIM.READY_COUNTDOWN_SECONDS}s lobby countdown started`);
+}
+
 function highestPlayerY(match) {
     let minY = SIM.CANVAS_HEIGHT;
     for (const p of match.players.values()) {
-        if (!p.alive) continue;
+        if (!p.inRound || !p.alive) continue;
         if (p.y < minY) minY = p.y;
     }
     return minY;
 }
 
-// Returns the Y of the lowest alive player (highest Y value = closest to the spike).
 function lowestAlivePlayerY(match) {
     let maxY = -Infinity;
     for (const p of match.players.values()) {
-        if (!p.alive) continue;
+        if (!p.inRound || !p.alive) continue;
         if (p.y > maxY) maxY = p.y;
     }
     return maxY;
@@ -519,6 +563,18 @@ function anyAlive(match) {
 }
 function anyPlayers(match) {
     return match.players.size > 0;
+}
+function anyInRound(match) {
+    for (const p of match.players.values()) {
+        if (p.inRound) return true;
+    }
+    return false;
+}
+function anyInRoundAlive(match) {
+    for (const p of match.players.values()) {
+        if (p.inRound && p.alive) return true;
+    }
+    return false;
 }
 
 function resolveBlockBounce(p, block, scale, eventsArr, world) {
@@ -582,7 +638,9 @@ function step(match, deltaSeconds) {
     match.eventsThisTick = [];
     resetTickDeltas(match.world);
 
-    if (match.roundState === ROUND_OVER) {
+    // Nothing to simulate while waiting for players to ready up or while
+    // showing the post-round scoreboard.
+    if (match.roundState === ROUND_WAITING || match.roundState === ROUND_OVER) {
         return;
     }
 
@@ -591,35 +649,33 @@ function step(match, deltaSeconds) {
         generateChunks(match.world, startY - SIM.CANVAS_HEIGHT * 1.5, match.elapsedMs);
 
         if (match.elapsedMs >= match.countdownEndsAtMs) {
-            match.roundState = ROUND_RUNNING;
-            console.log(`[server] countdown ended — round running`);
+            // Assign participation based on who clicked READY in time.
+            for (const [id, p] of match.players) {
+                p.inRound = match.readyPlayers.has(id);
+            }
+
+            if (!anyInRound(match)) {
+                // Edge case: everyone disconnected before countdown finished.
+                match.roundState = ROUND_WAITING;
+                console.log('[server] countdown ended with no ready players — back to waiting');
+            } else {
+                match.roundState = ROUND_RUNNING;
+                match.hasStarted = true;   // physics start immediately; no "wait for first flap"
+                console.log(`[server] countdown ended — ${match.readyPlayers.size} player(s) in round`);
+            }
         }
         return;
     }
+
+    // ── ROUND_RUNNING ────────────────────────────────────────────────────────
 
     const w = match.world;
 
-    if (!match.hasStarted) {
-        for (const p of match.players.values()) {
-            if (!p.flapQueued) continue;
-            p.flapQueued = false;
-            p.vy = -SIM.JUMP_FORCE;
-            p.vx = SIM.HORIZONTAL_SPEED * p.nextFlapDirection;
-            p.facingRight = p.nextFlapDirection === 1;
-            p.nextFlapDirection = (p.nextFlapDirection === 1) ? -1 : 1;
-            p.lastFlapTime = match.elapsedMs;
-            clampVelocity(p);
-            match.hasStarted = true;
-        }
-        return;
-    }
-
-    // Spike movement: apply a large chase bonus when the spike is more than
-    // HAZARD_CHASE_THRESHOLD pixels below the last alive player, so it surges
-    // to close the gap and keeps pressure on even if players climb fast.
+    // Spike movement
     const lastAliveY = lowestAlivePlayerY(match);
     const spikeGap = match.spikeY - lastAliveY;
-    const effectiveHazardSpeed = match.hazardSpeed + (spikeGap > SIM.HAZARD_CHASE_THRESHOLD ? SIM.HAZARD_CHASE_BONUS : 0);
+    const effectiveHazardSpeed = match.hazardSpeed +
+        (spikeGap > SIM.HAZARD_CHASE_THRESHOLD ? SIM.HAZARD_CHASE_BONUS : 0);
     match.spikeY -= effectiveHazardSpeed * deltaSeconds;
 
     const highY = highestPlayerY(match);
@@ -683,7 +739,7 @@ function step(match, deltaSeconds) {
         let target = null;
         let bestDistSq = SIM.OCTAGON.range * SIM.OCTAGON.range;
         for (const pl of match.players.values()) {
-            if (!pl.alive) continue;
+            if (!pl.inRound || !pl.alive) continue;
             if (pl.y <= o.y) continue;
             const dx = pl.x - o.x, dy = pl.y - o.y;
             const dsq = dx * dx + dy * dy;
@@ -707,8 +763,9 @@ function step(match, deltaSeconds) {
         proj.y += proj.vy * deltaSeconds;
     }
 
+    // Only simulate physics for players who are in the round.
     for (const p of match.players.values()) {
-        if (!p.alive) continue;
+        if (!p.inRound || !p.alive) continue;
 
         const stunned = (match.elapsedMs - p.lastStunTime) < SIM.STUN_DURATION_MS;
         if (p.flapQueued) {
@@ -867,8 +924,11 @@ function step(match, deltaSeconds) {
         match.eventsThisTick.push({ type: 'interval_reached', n: intervalNumber });
     }
 
-    if (match.hasStarted && match.roundState === ROUND_RUNNING && anyPlayers(match) && !anyAlive(match)) {
-        match.roundState = ROUND_OVER;
+    // Round over when all participants are dead (or none remain connected).
+    if (match.hasStarted && match.roundState === ROUND_RUNNING) {
+        if (!anyInRound(match) || !anyInRoundAlive(match)) {
+            match.roundState = ROUND_OVER;
+        }
     }
 }
 
@@ -887,14 +947,18 @@ function buildWorldInit(world) {
 }
 
 function buildSnapshot(match) {
+    // All connected players are sent (inRound flag tells client who is
+    // participating). Spectators stay at spawn position with alive=false.
     const players = {};
     for (const p of match.players.values()) {
         players[p.id] = {
             x: p.x, y: p.y, vx: p.vx, vy: p.vy,
             alive: p.alive, facingRight: p.facingRight, score: p.score,
             stunned: (match.elapsedMs - p.lastStunTime) < SIM.STUN_DURATION_MS,
+            inRound: p.inRound,
         };
     }
+
     const pentagonStates = {};
     for (const pent of match.world.pentagons.values()) {
         pentagonStates[pent.id] = { x: pent.x, y: pent.y, angle: pent.angle };
@@ -928,8 +992,10 @@ function buildSnapshot(match) {
         }
     }
 
+    // Only include round participants in the final scoreboard.
     const finalScores = [];
     for (const p of match.players.values()) {
+        if (!p.inRound) continue;
         finalScores.push({ id: p.id, score: p.score });
     }
     finalScores.sort((a, b) => b.score - a.score);
@@ -937,6 +1003,14 @@ function buildSnapshot(match) {
     let countdownRemainingMs = 0;
     if (match.roundState === ROUND_COUNTDOWN) {
         countdownRemainingMs = Math.max(0, match.countdownEndsAtMs - match.elapsedMs);
+    }
+
+    // For spectators: let clients know where the action is so they can pan camera.
+    let leadingPlayerY = SIM.CANVAS_HEIGHT - SIM.START_Y_OFFSET;
+    for (const p of match.players.values()) {
+        if (p.inRound && p.alive && p.y < leadingPlayerY) {
+            leadingPlayerY = p.y;
+        }
     }
 
     return {
@@ -947,6 +1021,8 @@ function buildSnapshot(match) {
         hazardSpeed: match.hazardSpeed,
         roundState: match.roundState,
         countdownRemainingMs,
+        readyCount: match.readyPlayers.size,
+        leadingPlayerY,
         finalScores,
         players,
         newBlocks: match.world.newBlocks,
@@ -998,6 +1074,12 @@ function newSessionId(match) {
 }
 
 wss.on('connection', (ws) => {
+    // Reject if we've hit the hard connection cap.
+    if (wss.clients.size > SIM.MAX_CONNECTIONS) {
+        ws.close(1008, 'Server full');
+        return;
+    }
+
     const sessionId = newSessionId(match);
     sessionByWs.set(ws, sessionId);
     sideWallSeenByWs.set(ws, 0);
@@ -1011,12 +1093,30 @@ wss.on('connection', (ws) => {
     ws.on('message', (raw) => {
         let msg;
         try { msg = JSON.parse(raw.toString()); } catch { return; }
+
         if (msg.type === 'flap') {
             queueFlap(match, sessionId);
+
         } else if (msg.type === 'ready') {
-            if (match.roundState === ROUND_OVER) {
-                console.log(`[server] ${sessionId} pressed READY — resetting round`);
+            if (match.roundState === ROUND_WAITING) {
+                // First player to click READY boots the new round: rebuild world
+                // and open a 10-s lobby window for others to join.
                 resetMatch(match);
+                beginCountdown(match, sessionId);
+
+            } else if (match.roundState === ROUND_COUNTDOWN) {
+                // Join the upcoming round during the open lobby window.
+                if (!match.readyPlayers.has(sessionId) &&
+                    match.readyPlayers.size < SIM.MAX_ROUND_PLAYERS) {
+                    match.readyPlayers.add(sessionId);
+                    console.log(`[server] ${sessionId} joined lobby (${match.readyPlayers.size}/${SIM.MAX_ROUND_PLAYERS} ready)`);
+                }
+
+            } else if (match.roundState === ROUND_OVER) {
+                // Same as ROUND_WAITING: the clicking player triggers a fresh
+                // round; others have 10 s to also click READY.
+                resetMatch(match);
+                beginCountdown(match, sessionId);
             }
         }
     });
@@ -1027,7 +1127,7 @@ wss.on('connection', (ws) => {
         removePlayer(match, sessionId);
         console.log(`[server] ${sessionId} left (${match.players.size} total, round=${match.roundState})`);
         if (match.roundState === ROUND_OVER && !anyPlayers(match)) {
-            console.log(`[server] all players gone during ROUND_OVER — auto-resetting`);
+            console.log('[server] all players gone during ROUND_OVER — auto-resetting');
             resetMatch(match);
         }
     });
@@ -1045,13 +1145,6 @@ setInterval(() => {
 
     step(match, deltaMs / 1000);
 
-    // World init for everyone (after reset). We send it here BEFORE building
-    // the snapshot. Then we wipe the per-tick deltas: world_init has already
-    // conveyed the full state, so we don't want the same blocks/coins to
-    // appear in this tick's snapshot's `newBlocks` / `newCoins` deltas as
-    // well — that would cause clients to spawn duplicate sprites for every
-    // entity, since `applyWorldInit` builds them from the init payload and
-    // then `applySnapshot` would build them again from the deltas.
     if (match.pendingWorldInitForAll) {
         match.pendingWorldInitForAll = false;
         const initMsg = JSON.stringify(buildWorldInit(match.world));
@@ -1060,8 +1153,6 @@ setInterval(() => {
             ws.send(initMsg);
             sideWallSeenByWs.set(ws, match.world.sideWallSegments.length);
         }
-        // Important: clear deltas so the snapshot built next doesn't re-send
-        // anything we just packed into the world_init.
         resetTickDeltas(match.world);
     }
 
@@ -1070,13 +1161,21 @@ setInterval(() => {
     const totalSegs = match.world.sideWallSegments.length;
     for (const ws of wss.clients) {
         if (ws.readyState !== 1) continue;
+        const sid = sessionByWs.get(ws);
         const seen = sideWallSeenByWs.get(ws) || 0;
-        let perClientSnap = snapBase;
+
+        // Per-client additions: new side-wall segments + whether this client has
+        // clicked READY for the current round (lets the client dim its own button).
+        const perClientExtras = {
+            myReady: sid ? match.readyPlayers.has(sid) : false,
+        };
+
         if (totalSegs > seen) {
-            const newSegs = match.world.sideWallSegments.slice(seen);
-            perClientSnap = Object.assign({}, snapBase, { newSideWallSegments: newSegs });
+            perClientExtras.newSideWallSegments = match.world.sideWallSegments.slice(seen);
             sideWallSeenByWs.set(ws, totalSegs);
         }
+
+        const perClientSnap = Object.assign({}, snapBase, perClientExtras);
         ws.send(JSON.stringify(perClientSnap));
     }
 
@@ -1086,12 +1185,16 @@ setInterval(() => {
         if (match.players.size > 0) {
             const w = match.world;
             const lines = [
-                `t=${(match.elapsedMs / 1000).toFixed(1)}s round=${match.roundState} spikeY=${match.spikeY.toFixed(0)} hazard=${match.hazardSpeed} interval=${match.nextIntervalIndex} ` +
-                `blocks=${w.blocks.size} coins=${w.coins.size} pent=${w.pentagons.size} hex=${w.hexagonPairs.size} ` +
-                `hept=${w.heptagons.size} oct=${w.octagons.size} proj=${w.projectiles.size}`
+                `t=${(match.elapsedMs / 1000).toFixed(1)}s round=${match.roundState} ` +
+                `spikeY=${match.spikeY.toFixed(0)} hazard=${match.hazardSpeed} ` +
+                `interval=${match.nextIntervalIndex} ready=${match.readyPlayers.size} ` +
+                `blocks=${w.blocks.size} coins=${w.coins.size} pent=${w.pentagons.size} ` +
+                `hex=${w.hexagonPairs.size} hept=${w.heptagons.size} oct=${w.octagons.size} ` +
+                `proj=${w.projectiles.size}`
             ];
             for (const p of match.players.values()) {
-                lines.push(`  ${p.id}: y=${p.y.toFixed(0)} score=${p.score} ${p.alive ? 'alive' : 'DEAD'}`);
+                lines.push(`  ${p.id}: y=${p.y.toFixed(0)} score=${p.score} ` +
+                    `${p.inRound ? (p.alive ? 'alive' : 'DEAD') : 'spectating'}`);
             }
             console.log(lines.join('\n'));
         }
