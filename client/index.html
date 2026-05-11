@@ -428,6 +428,9 @@
 
                 this.waitingUI = null;
                 this.spectatingText = null;
+                this.spectatingLeftArrow = null;
+                this.spectatingRightArrow = null;
+                this.aliveInRoundPlayers = [];
                 this.isSpectating = false;
                 this.spectatorCameraY = null;
                 this.spectatingPlayerId = null;
@@ -452,7 +455,7 @@
                 this.spikeContainer = this.add.container(0, CANVAS_HEIGHT + 50);
                 this.spikeContainer.setDepth(5);
                 const spikeBgHeight = 50000;
-                const spikeBg = this.add.rectangle(0, 45, CANVAS_WIDTH, spikeBgHeight, 0x000000);
+                const spikeBg = this.add.rectangle(0, 64, CANVAS_WIDTH, spikeBgHeight, 0x000000);
                 spikeBg.setOrigin(0, 0);
                 this.spikeContainer.add(spikeBg);
 
@@ -460,7 +463,7 @@
                 const spikeCount = 16;
                 const spikeWidth = CANVAS_WIDTH / (spikeCount + 1);
                 for (let i = 0; i < spikeCount; i++) {
-                    const s = this.add.image((i + 1) * spikeWidth, 0, 'spike_single').setOrigin(0.5, 0);
+                    const s = this.add.image((i + 1) * spikeWidth, -3, 'spike_single').setOrigin(0.5, 0);
                     this.spikeContainer.add(s);
                     this.spikes.push(s);
                 }
@@ -513,8 +516,8 @@
 
                 const sG = this.make.graphics();
                 sG.fillStyle(Phaser.Display.Color.HexStringToColor(COLORS.hazard).color);
-                sG.fillTriangle(64, 0, 0, 128, 128, 128);
-                sG.generateTexture('spike_single', 128, 128);
+                sG.fillTriangle(64, 3, 0, 131, 128, 131);
+                sG.generateTexture('spike_single', 128, 131);
                 sG.destroy();
 
                 const pentSize = SIM.PENTAGON_SIZE;
@@ -854,6 +857,7 @@
                 this.isSpectating = false;
                 this.spectatorCameraY = null;
                 this.spectatingPlayerId = null;
+                this.aliveInRoundPlayers = [];
                 if (this.spectateOnDeathTimer) { this.spectateOnDeathTimer.remove(); this.spectateOnDeathTimer = null; }
                 this.countdownReadySet = new Set();
 
@@ -1134,16 +1138,43 @@
             showSpectatingUI() {
                 if (this.spectatingText) return;
                 this.spectatingText = this.add.text(
-                    CANVAS_WIDTH / 2, 70, 'Spectating',
+                    CANVAS_WIDTH / 2, 145, 'Spectating',
                     {
                         fontFamily: 'Arial', fontSize: '32px', fontStyle: 'bold',
                         color: '#ffffff', stroke: '#000000', strokeThickness: 6
                     }
                 ).setOrigin(0.5, 0).setScrollFactor(0).setDepth(100);
+
+                this.spectatingLeftArrow = this.add.text(
+                    CANVAS_WIDTH / 2 - 80, 195, '⇐',
+                    { fontFamily: 'Arial', fontSize: '52px', color: '#ffffff' }
+                ).setOrigin(0.5, 0).setScrollFactor(0).setDepth(100).setVisible(false)
+                    .setInteractive({ useHandCursor: true });
+
+                this.spectatingRightArrow = this.add.text(
+                    CANVAS_WIDTH / 2 + 80, 195, '⇒',
+                    { fontFamily: 'Arial', fontSize: '52px', color: '#ffffff' }
+                ).setOrigin(0.5, 0).setScrollFactor(0).setDepth(100).setVisible(false)
+                    .setInteractive({ useHandCursor: true });
+
+                this.spectatingLeftArrow.on('pointerdown', () => this.cycleSpectatedPlayer(-1));
+                this.spectatingRightArrow.on('pointerdown', () => this.cycleSpectatedPlayer(1));
+            }
+
+            cycleSpectatedPlayer(dir) {
+                if (!this.aliveInRoundPlayers || this.aliveInRoundPlayers.length <= 1) return;
+                const idx = this.aliveInRoundPlayers.findIndex(p => p.id === this.spectatingPlayerId);
+                const base = idx === -1 ? 0 : idx;
+                const next = (base + dir + this.aliveInRoundPlayers.length) % this.aliveInRoundPlayers.length;
+                const target = this.aliveInRoundPlayers[next];
+                this.spectatingPlayerId = target.id;
+                this.spectatorCameraY = target.y;
             }
 
             hideSpectatingUI() {
                 if (this.spectatingText) { this.spectatingText.destroy(); this.spectatingText = null; }
+                if (this.spectatingLeftArrow) { this.spectatingLeftArrow.destroy(); this.spectatingLeftArrow = null; }
+                if (this.spectatingRightArrow) { this.spectatingRightArrow.destroy(); this.spectatingRightArrow = null; }
             }
 
             updateTopScorer(players) {
@@ -1229,8 +1260,39 @@
                     this.showSpectatingUI();
                 }
                 if (this.isSpectating) {
-                    if (snap.leadingPlayerY != null) this.spectatorCameraY = snap.leadingPlayerY;
-                    if (snap.leadingPlayerId != null) this.spectatingPlayerId = snap.leadingPlayerId;
+                    // Build sorted list of alive inRound players (lowest Y = highest altitude = index 0)
+                    this.aliveInRoundPlayers = [];
+                    if (snap.players) {
+                        for (const [id, p] of Object.entries(snap.players)) {
+                            if (p.inRound && p.alive) this.aliveInRoundPlayers.push({ id, y: p.y });
+                        }
+                        this.aliveInRoundPlayers.sort((a, b) => a.y - b.y);
+                    }
+
+                    // Auto-switch if the current spectated player has died
+                    if (this.spectatingPlayerId && snap.players) {
+                        const sp = snap.players[this.spectatingPlayerId];
+                        if (!sp || !sp.alive || !sp.inRound) this.spectatingPlayerId = snap.leadingPlayerId;
+                    }
+                    if (!this.spectatingPlayerId) this.spectatingPlayerId = snap.leadingPlayerId;
+
+                    // Update camera target from selected player
+                    if (this.spectatingPlayerId && snap.players && snap.players[this.spectatingPlayerId]) {
+                        this.spectatorCameraY = snap.players[this.spectatingPlayerId].y;
+                    } else if (snap.leadingPlayerY != null) {
+                        this.spectatorCameraY = snap.leadingPlayerY;
+                    }
+
+                    // Update "Spectating [name]" text
+                    if (this.spectatingText) {
+                        const name = this.spectatingPlayerId ? this.spectatingPlayerId.split('_')[0] : '';
+                        this.spectatingText.setText('Spectating ' + name);
+                    }
+
+                    // Show arrows only when multiple players are alive to cycle through
+                    const showArrows = this.aliveInRoundPlayers.length > 1;
+                    if (this.spectatingLeftArrow) this.spectatingLeftArrow.setAlpha(showArrows ? 1 : 0);
+                    if (this.spectatingRightArrow) this.spectatingRightArrow.setAlpha(showArrows ? 1 : 0);
                 }
 
                 if (snap.newSideWallSegments) for (const seg of snap.newSideWallSegments) this.spawnSideWallSegment(seg);
@@ -1844,7 +1906,7 @@
 
                 if (this.spikes) {
                     this.spikes.forEach((s, idx) => {
-                        s.y = Math.sin((time / 200) + idx) * 10;
+                        s.y = -3 + Math.sin((time / 200) + idx) * 10;
                     });
                 }
             }
