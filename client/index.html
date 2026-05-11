@@ -260,6 +260,12 @@
             menuPanel.classList.toggle('open');
         });
 
+        // Prevent pointerdown / touchstart on overlay elements from reaching the Phaser canvas
+        [menuBtn, menuPanel, speakerBtn].forEach(el => {
+            el.addEventListener('pointerdown', e => e.stopPropagation());
+            el.addEventListener('touchstart', e => e.stopPropagation(), { passive: false });
+        });
+
         document.addEventListener('click', (e) => {
             if (!menuPanel.contains(e.target) && e.target !== menuBtn) {
                 menuPanel.classList.remove('open');
@@ -1147,13 +1153,13 @@
 
                 this.spectatingLeftArrow = this.add.text(
                     CANVAS_WIDTH / 2 - 80, 195, '⇐',
-                    { fontFamily: 'Arial', fontSize: '52px', color: '#ffffff' }
+                    { fontFamily: 'Arial', fontSize: '64px', color: '#ffffff', stroke: '#000000', strokeThickness: 6 }
                 ).setOrigin(0.5, 0).setScrollFactor(0).setDepth(100).setVisible(false)
                     .setInteractive({ useHandCursor: true });
 
                 this.spectatingRightArrow = this.add.text(
                     CANVAS_WIDTH / 2 + 80, 195, '⇒',
-                    { fontFamily: 'Arial', fontSize: '52px', color: '#ffffff' }
+                    { fontFamily: 'Arial', fontSize: '64px', color: '#ffffff', stroke: '#000000', strokeThickness: 6 }
                 ).setOrigin(0.5, 0).setScrollFactor(0).setDepth(100).setVisible(false)
                     .setInteractive({ useHandCursor: true });
 
@@ -1852,7 +1858,9 @@
 
                 if (!this.gameOverOverlayShown && this.roundState === ROUND_RUNNING && !this.isSpectating) {
                     const pointer = this.input.activePointer;
-                    const isHeld = (pointer && pointer.isDown) || (this.spaceKey && this.spaceKey.isDown);
+                    const pointerOnCanvas = pointer.isDown &&
+                        (!pointer.event || pointer.event.target === this.sys.game.canvas);
+                    const isHeld = pointerOnCanvas || (this.spaceKey && this.spaceKey.isDown);
                     if (isHeld) {
                         const localFlap = this.applyFlapToMyState();
                         if (localFlap) {
