@@ -430,6 +430,8 @@
                 this.spectatingText = null;
                 this.isSpectating = false;
                 this.spectatorCameraY = null;
+                this.spectatingPlayerId = null;
+                this.spectateOnDeathTimer = null;
                 this.countdownReadySet = new Set();
             }
 
@@ -851,6 +853,8 @@
                 this.hideSpectatingUI();
                 this.isSpectating = false;
                 this.spectatorCameraY = null;
+                this.spectatingPlayerId = null;
+                if (this.spectateOnDeathTimer) { this.spectateOnDeathTimer.remove(); this.spectateOnDeathTimer = null; }
                 this.countdownReadySet = new Set();
 
                 // Snap camera back to spawn so the next round doesn't start mid-air
@@ -1130,10 +1134,10 @@
             showSpectatingUI() {
                 if (this.spectatingText) return;
                 this.spectatingText = this.add.text(
-                    CANVAS_WIDTH / 2, 20, '👁 SPECTATING',
+                    CANVAS_WIDTH / 2, 70, 'Spectating',
                     {
-                        fontFamily: 'Arial', fontSize: '24px', fontStyle: 'bold',
-                        color: '#ffffff', stroke: '#000000', strokeThickness: 5
+                        fontFamily: 'Arial', fontSize: '32px', fontStyle: 'bold',
+                        color: '#ffffff', stroke: '#000000', strokeThickness: 6
                     }
                 ).setOrigin(0.5, 0).setScrollFactor(0).setDepth(100);
             }
@@ -1224,8 +1228,9 @@
                     this.cameras.main.stopFollow();
                     this.showSpectatingUI();
                 }
-                if (this.isSpectating && snap.leadingPlayerY != null) {
-                    this.spectatorCameraY = snap.leadingPlayerY;
+                if (this.isSpectating) {
+                    if (snap.leadingPlayerY != null) this.spectatorCameraY = snap.leadingPlayerY;
+                    if (snap.leadingPlayerId != null) this.spectatingPlayerId = snap.leadingPlayerId;
                 }
 
                 if (snap.newSideWallSegments) for (const seg of snap.newSideWallSegments) this.spawnSideWallSegment(seg);
@@ -1397,7 +1402,7 @@
                         };
                         if (this.myState.alive && !p.alive) this.myState.alive = false;
 
-                        if (this.scoreText) {
+                        if (this.scoreText && !this.isSpectating) {
                             const s = (p.score || 0).toString();
                             if (this.scoreText.text !== s) {
                                 this.scoreText.setText(s);
@@ -1409,6 +1414,17 @@
                         if (wasAlive !== false && p.alive === false) {
                             v.sprite.setTint(0xff0000);
                             v.eyesContainer.setVisible(false);
+                            // Transition to spectating 2 s after dying (if not already spectating)
+                            if (!this.isSpectating && !this.spectateOnDeathTimer) {
+                                this.spectateOnDeathTimer = this.time.delayedCall(2000, () => {
+                                    this.spectateOnDeathTimer = null;
+                                    if (!this.isSpectating) {
+                                        this.isSpectating = true;
+                                        this.cameras.main.stopFollow();
+                                        this.showSpectatingUI();
+                                    }
+                                });
+                            }
                         }
                         this.previousAlive.set(id, p.alive);
                     } else {
@@ -1419,6 +1435,18 @@
                 // Update top-scorer display every snapshot
                 if (snap.players) {
                     this.updateTopScorer(snap.players);
+                }
+
+                // When spectating, show the leading player's score instead of own (which is 0)
+                if (this.isSpectating && this.spectatingPlayerId && snap.players) {
+                    const sp = snap.players[this.spectatingPlayerId];
+                    if (sp && this.scoreText) {
+                        const s = (sp.score || 0).toString();
+                        if (this.scoreText.text !== s) {
+                            this.scoreText.setText(s);
+                            this.tweens.add({ targets: this.scoreText, scale: 1.2, duration: 100, yoyo: true });
+                        }
+                    }
                 }
 
                 for (const [id, v] of this.playerVisuals) {

@@ -1008,9 +1008,11 @@ function buildSnapshot(match) {
 
     // For spectators: let clients know where the action is so they can pan camera.
     let leadingPlayerY = SIM.CANVAS_HEIGHT - SIM.START_Y_OFFSET;
+    let leadingPlayerId = null;
     for (const p of match.players.values()) {
         if (p.inRound && p.alive && p.y < leadingPlayerY) {
             leadingPlayerY = p.y;
+            leadingPlayerId = p.id;
         }
     }
 
@@ -1025,6 +1027,7 @@ function buildSnapshot(match) {
         readyCount: match.readyPlayers.size,
         readyPlayerIds: Array.from(match.readyPlayers),
         leadingPlayerY,
+        leadingPlayerId,
         finalScores,
         players,
         newBlocks: match.world.newBlocks,
