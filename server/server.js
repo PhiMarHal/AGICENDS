@@ -956,6 +956,7 @@ function buildSnapshot(match) {
             alive: p.alive, facingRight: p.facingRight, score: p.score,
             stunned: (match.elapsedMs - p.lastStunTime) < SIM.STUN_DURATION_MS,
             inRound: p.inRound,
+            pendingInRound: !p.inRound && match.readyPlayers.has(p.id),
         };
     }
 

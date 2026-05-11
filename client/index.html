@@ -852,6 +852,10 @@
                 this.isSpectating = false;
                 this.spectatorCameraY = null;
                 this.countdownReadySet = new Set();
+
+                // Snap camera back to spawn so the next round doesn't start mid-air
+                this.cameras.main.stopFollow();
+                this.cameras.main.setScroll(0, 0);
             }
 
             applyWorldInit(msg) {
@@ -1353,7 +1357,7 @@
                     const isMe = (id === mySessionId);
 
                     // Players who haven't joined this round get no sprite or proximity entry
-                    if (!p.inRound) {
+                    if (!p.inRound && !p.pendingInRound) {
                         const stale = this.playerVisuals.get(id);
                         if (stale) {
                             this.destroyPlayerVisual(stale);
