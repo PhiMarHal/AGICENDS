@@ -1291,8 +1291,8 @@
 
                     // Show arrows only when multiple players are alive to cycle through
                     const showArrows = this.aliveInRoundPlayers.length > 1;
-                    if (this.spectatingLeftArrow) this.spectatingLeftArrow.setAlpha(showArrows ? 1 : 0);
-                    if (this.spectatingRightArrow) this.spectatingRightArrow.setAlpha(showArrows ? 1 : 0);
+                    if (this.spectatingLeftArrow) this.spectatingLeftArrow.setVisible(showArrows);
+                    if (this.spectatingRightArrow) this.spectatingRightArrow.setVisible(showArrows);
                 }
 
                 if (snap.newSideWallSegments) for (const seg of snap.newSideWallSegments) this.spawnSideWallSegment(seg);
