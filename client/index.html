@@ -1350,10 +1350,21 @@
                 for (const id in snap.players) {
                     seenIds.add(id);
                     const p = snap.players[id];
+                    const isMe = (id === mySessionId);
+
+                    // Players who haven't joined this round get no sprite or proximity entry
+                    if (!p.inRound) {
+                        const stale = this.playerVisuals.get(id);
+                        if (stale) {
+                            this.destroyPlayerVisual(stale);
+                            this.playerVisuals.delete(id);
+                            this.interpBuffers.delete(id);
+                            this.latestPlayerData.delete(id);
+                        }
+                        continue;
+                    }
 
                     this.latestPlayerData.set(id, { x: p.x, y: p.y, alive: p.alive });
-
-                    const isMe = (id === mySessionId);
                     let v = this.playerVisuals.get(id);
                     if (!v) {
                         v = this.createPlayerVisual(id, isMe);
