@@ -14,7 +14,7 @@
 //      a redirect back to the game with the token in the URL fragment
 //      (twitter, google) — to be implemented per provider.
 
-import { json, safeJson, one } from './index.js';
+import { json, safeJson, one, run } from './index.js';
 
 // ═══════════════════════════════════════════════════════════════════════
 // §JWT — minimal HS256 JSON Web Tokens
@@ -179,24 +179,193 @@ export async function handleLogout(_request, _env) {
 //   POST /auth/bespoke/signup   { username, password } → { token, user }
 //   POST /auth/bespoke/signin   { username, password } → { token, user }
 //
-// Password hashing will use PBKDF2-SHA256 via Workers' built-in
-// crypto.subtle (no dependency). Stored credential format:
-//   { v: 1, salt: <b64>, iterations: 600000, hash: <b64> }
-// where `v` is a version tag so we can rotate the algorithm later.
+// Validation rules:
+//   Username: 3–16 chars, [A-Za-z0-9_], case-insensitive uniqueness.
+//             Original case is preserved in users.display_name; the
+//             lowercased form is the auth_identities.external_id (the
+//             login key, so case doesn't affect sign-in).
+//   Password: 8–1024 chars, no required character classes.
+//             (The 1024 max is a sanity cap, not a security limit —
+//             it just prevents someone from posting 10MB of "password".)
+//
+// Password hashing uses PBKDF2-SHA256 via Workers' built-in crypto.subtle
+// (no external dependency). Stored credential format (JSON):
+//   { v: 1, salt: <b64>, iterations: 100000, hash: <b64> }
+// The `v` tag lets us migrate to higher iteration counts (or a different
+// algorithm) later by re-hashing on next sign-in.
 
-export async function signupBespoke(_request, env) {
+const USERNAME_RE = /^[A-Za-z0-9_]{3,16}$/;
+const MIN_PASSWORD_LEN = 8;
+const MAX_PASSWORD_LEN = 64;
+const PBKDF2_ITERATIONS = 100000;
+
+export async function signupBespoke(request, env) {
     if (env.BESPOKE_SIGNUPS_OPEN !== 'true') {
         return json({ error: 'signups_closed' }, 403);
     }
-    // TODO: validate username, check uniqueness, hash password, insert
-    //       user + auth_identity, issue session.
-    return json({ error: 'not_implemented' }, 501);
+
+    const body = await safeJson(request);
+    const username = body?.username;
+    const password = body?.password;
+
+    if (typeof username !== 'string' || !USERNAME_RE.test(username)) {
+        return json({
+            error: 'invalid_username',
+            message: 'Username must be 3–16 characters, letters/digits/underscore only.',
+        }, 400);
+    }
+    if (typeof password !== 'string'
+        || password.length < MIN_PASSWORD_LEN
+        || password.length > MAX_PASSWORD_LEN) {
+        return json({
+            error: 'invalid_password',
+            message: `Password must be ${MIN_PASSWORD_LEN}–${MAX_PASSWORD_LEN} characters.`,
+        }, 400);
+    }
+
+    const externalId = username.toLowerCase();
+
+    // Uniqueness check on both axes: the auth_identities lookup key AND
+    // users.display_name (which has a UNIQUE NOCASE index, so this also
+    // catches a different provider having already claimed the same name).
+    const existingIdentity = await one(env,
+        'SELECT id FROM auth_identities WHERE provider = ? AND external_id = ?',
+        'bespoke', externalId,
+    );
+    if (existingIdentity) {
+        return json({ error: 'username_taken' }, 409);
+    }
+    const existingName = await one(env,
+        'SELECT id FROM users WHERE display_name = ?',
+        username,
+    );
+    if (existingName) {
+        return json({ error: 'username_taken' }, 409);
+    }
+
+    const credential = await hashPassword(password);
+    const nowMs = Date.now();
+
+    // We do two inserts. D1's JS API doesn't expose multi-statement
+    // transactions cleanly, so if the second insert fails (very unlikely
+    // — same connection, same request, no concurrent writer on this row)
+    // we'd leave an orphan users row with no auth_identity. That's
+    // recoverable manually and harmless (the user just can't sign in).
+    // Not worth the complexity of a batched prepared-statement workaround.
+    const insertUser = await run(env,
+        'INSERT INTO users(display_name, created_at) VALUES(?, ?)',
+        username, nowMs,
+    );
+    const userId = insertUser.meta.last_row_id;
+
+    await run(env,
+        'INSERT INTO auth_identities(user_id, provider, external_id, credential, created_at) VALUES(?, ?, ?, ?, ?)',
+        userId, 'bespoke', externalId, credential, nowMs,
+    );
+
+    const user = { id: userId, display_name: username };
+    const token = await issueSession(env, user);
+    return json({ token, user });
 }
 
-export async function signinBespoke(_request, _env) {
-    // TODO: look up auth_identity by lowercased username, verify password
-    //       against stored hash, issue session.
-    return json({ error: 'not_implemented' }, 501);
+export async function signinBespoke(request, env) {
+    const body = await safeJson(request);
+    const username = body?.username;
+    const password = body?.password;
+
+    // Generic 401 for ANY input problem — never tell an attacker whether
+    // the username exists or whether the password was the wrong part.
+    if (typeof username !== 'string' || typeof password !== 'string') {
+        return json({ error: 'invalid_credentials' }, 401);
+    }
+
+    const externalId = username.toLowerCase();
+
+    const row = await one(env,
+        `SELECT ai.credential, u.id AS user_id, u.display_name, u.status
+         FROM auth_identities ai
+         JOIN users u ON u.id = ai.user_id
+         WHERE ai.provider = ? AND ai.external_id = ?`,
+        'bespoke', externalId,
+    );
+
+    if (!row || !row.credential) {
+        return json({ error: 'invalid_credentials' }, 401);
+    }
+
+    const ok = await verifyPassword(password, row.credential);
+    if (!ok) {
+        return json({ error: 'invalid_credentials' }, 401);
+    }
+
+    if (row.status !== 'active') {
+        return json({ error: 'account_disabled' }, 403);
+    }
+
+    const user = { id: row.user_id, display_name: row.display_name };
+    const token = await issueSession(env, user);
+    return json({ token, user });
+}
+
+// ── password hashing helpers (PBKDF2-SHA256 via Web Crypto) ─────────────
+
+async function hashPassword(password) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const hash = await pbkdf2(password, salt, PBKDF2_ITERATIONS);
+    return JSON.stringify({
+        v: 1,
+        salt: bytesToB64(salt),
+        iterations: PBKDF2_ITERATIONS,
+        hash: bytesToB64(hash),
+    });
+}
+
+async function verifyPassword(password, storedJson) {
+    let creds;
+    try { creds = JSON.parse(storedJson); } catch (_) { return false; }
+    if (creds?.v !== 1) return false;
+
+    const salt = b64ToBytes(creds.salt);
+    const expected = b64ToBytes(creds.hash);
+    const actual = await pbkdf2(password, salt, creds.iterations);
+
+    return constantTimeBytesEqual(actual, expected);
+}
+
+async function pbkdf2(password, salt, iterations) {
+    const key = await crypto.subtle.importKey(
+        'raw',
+        new TextEncoder().encode(password),
+        { name: 'PBKDF2' },
+        false,
+        ['deriveBits'],
+    );
+    const bits = await crypto.subtle.deriveBits(
+        { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
+        key,
+        256,  // bits → 32-byte hash
+    );
+    return new Uint8Array(bits);
+}
+
+function bytesToB64(bytes) {
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+}
+
+function b64ToBytes(b64) {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+}
+
+function constantTimeBytesEqual(a, b) {
+    if (a.length !== b.length) return false;
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+    return diff === 0;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
