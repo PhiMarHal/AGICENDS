@@ -138,6 +138,143 @@
             border-radius: 4px;
             display: none;
         }
+
+        /* ── Auth UI: button inside menu, plus modal ── */
+        #menu-panel hr {
+            border: none;
+            border-top: 1px solid #444;
+            margin: 8px 0;
+        }
+
+        #menu-panel button {
+            display: block;
+            width: 100%;
+            margin: 0;
+            background: #fff;
+            color: #000;
+            border: none;
+            font-family: monospace;
+            font-size: 13px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        #menu-panel button:hover {
+            background: #ddd;
+        }
+
+        #auth-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 30;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #auth-overlay.open {
+            display: flex;
+        }
+
+        #auth-modal {
+            background: rgba(0, 0, 0, 0.95);
+            color: #fff;
+            font-family: monospace;
+            font-size: 13px;
+            padding: 18px 20px;
+            border-radius: 6px;
+            min-width: 280px;
+            max-width: 90vw;
+        }
+
+        #auth-modal h2 {
+            margin: 0 0 4px 0;
+            font-size: 16px;
+            font-weight: normal;
+        }
+
+        #auth-modal label {
+            display: block;
+            margin-top: 10px;
+            color: #ccc;
+        }
+
+        #auth-modal input {
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
+            background: #1a1a1a;
+            color: #fff;
+            border: 1px solid #444;
+            font-family: monospace;
+            font-size: 13px;
+            padding: 6px 8px;
+            margin-top: 3px;
+            border-radius: 4px;
+        }
+
+        #auth-modal input:focus {
+            outline: none;
+            border-color: #888;
+        }
+
+        #auth-error {
+            margin-top: 10px;
+            color: #f88;
+            font-size: 12px;
+            min-height: 14px;
+        }
+
+        #auth-modal .auth-buttons {
+            display: flex;
+            gap: 8px;
+            margin-top: 14px;
+        }
+
+        #auth-modal .auth-buttons button {
+            flex: 1;
+            background: #fff;
+            color: #000;
+            border: none;
+            font-family: monospace;
+            font-size: 13px;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        #auth-modal .auth-buttons button.secondary {
+            background: #333;
+            color: #fff;
+        }
+
+        #auth-modal .auth-buttons button:hover {
+            background: #ddd;
+        }
+
+        #auth-modal .auth-buttons button.secondary:hover {
+            background: #444;
+        }
+
+        #auth-modal .auth-buttons button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        #auth-toggle-link {
+            margin-top: 10px;
+            color: #888;
+            cursor: pointer;
+            font-size: 12px;
+            text-decoration: underline;
+            text-align: center;
+        }
+
+        #auth-toggle-link:hover {
+            color: #ccc;
+        }
     </style>
 </head>
 
@@ -148,6 +285,28 @@
     <div id="menu-btn">☰</div>
     <div id="menu-panel">
         <span id="menu-player-name">you are …</span>
+        <hr>
+        <button id="menu-auth-btn">Sign in</button>
+    </div>
+
+    <!-- Auth modal (sign in / sign up). Hidden by default. -->
+    <div id="auth-overlay">
+        <div id="auth-modal">
+            <h2 id="auth-title">Sign in</h2>
+            <label>Username
+                <input type="text" id="auth-username" autocomplete="username" maxlength="16" autocapitalize="off"
+                    autocorrect="off" spellcheck="false">
+            </label>
+            <label>Password
+                <input type="password" id="auth-password" autocomplete="current-password" maxlength="64">
+            </label>
+            <div id="auth-error"></div>
+            <div class="auth-buttons">
+                <button class="secondary" id="auth-cancel">Cancel</button>
+                <button id="auth-submit">Sign in</button>
+            </div>
+            <div id="auth-toggle-link">Don't have an account? Sign up</div>
+        </div>
     </div>
 
     <!-- Top right: speaker toggle -->
@@ -284,6 +443,188 @@
         });
 
         // ========================================================================
+        // Auth UI: sign in / sign up modal, token storage, menu wiring
+        // ========================================================================
+        // The Worker URL where signup/signin/verify endpoints live. Update this
+        // if you point the Worker at a custom domain. The page can be served
+        // from anywhere — localhost, a CDN, your real domain — and call out
+        // to this URL via fetch (CORS is configured in the Worker).
+        const AUTH_WORKER_URL = 'https://agiscends-auth.philoiyaa.workers.dev';
+        const AUTH_TOKEN_KEY = 'agiscends_auth_token';
+
+        // currentUser is { id, display_name } when logged in, null when anon.
+        // It's set from the welcome message after the WebSocket handshake.
+        let currentUser = null;
+
+        function getStoredToken() {
+            try { return localStorage.getItem(AUTH_TOKEN_KEY); } catch { return null; }
+        }
+        function setStoredToken(token) {
+            try {
+                if (token) localStorage.setItem(AUTH_TOKEN_KEY, token);
+                else localStorage.removeItem(AUTH_TOKEN_KEY);
+            } catch { /* ignore — private mode, etc. */ }
+        }
+
+        async function authSignIn(username, password) {
+            const res = await fetch(AUTH_WORKER_URL + '/auth/bespoke/signin', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ username, password }),
+            });
+            return await res.json();
+        }
+        async function authSignUp(username, password) {
+            const res = await fetch(AUTH_WORKER_URL + '/auth/bespoke/signup', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ username, password }),
+            });
+            return await res.json();
+        }
+
+        // Map server error codes to friendly text the user sees in the modal.
+        function friendlyAuthError(result) {
+            if (!result) return 'Unknown error.';
+            if (result.error === 'username_taken') return 'Username already taken.';
+            if (result.error === 'invalid_username') return result.message || 'Invalid username.';
+            if (result.error === 'invalid_password') return result.message || 'Invalid password.';
+            if (result.error === 'invalid_credentials') return 'Wrong username or password.';
+            if (result.error === 'signups_closed') return 'Sign-ups are currently closed.';
+            return result.message || ('Error: ' + (result.error || 'unknown'));
+        }
+
+        // Updates the menu panel to reflect current auth state. Called when
+        // welcome arrives, after a successful sign in, and after sign out.
+        function updateMenuFromAuth() {
+            const nameEl = document.getElementById('menu-player-name');
+            const btnEl = document.getElementById('menu-auth-btn');
+            if (currentUser) {
+                nameEl.textContent = 'you are ' + currentUser.display_name;
+                btnEl.textContent = 'Sign out';
+            } else {
+                nameEl.textContent = 'you are ' + (mySessionId || '…');
+                btnEl.textContent = 'Sign in';
+            }
+        }
+
+        const authOverlay = document.getElementById('auth-overlay');
+        const authTitle = document.getElementById('auth-title');
+        const authUsername = document.getElementById('auth-username');
+        const authPassword = document.getElementById('auth-password');
+        const authSubmit = document.getElementById('auth-submit');
+        const authCancel = document.getElementById('auth-cancel');
+        const authToggleLink = document.getElementById('auth-toggle-link');
+        const authError = document.getElementById('auth-error');
+        const menuAuthBtn = document.getElementById('menu-auth-btn');
+
+        let authMode = 'signin';   // 'signin' | 'signup'
+
+        function refreshAuthModalUI() {
+            if (authMode === 'signin') {
+                authTitle.textContent = 'Sign in';
+                authSubmit.textContent = 'Sign in';
+                authPassword.autocomplete = 'current-password';
+                authToggleLink.textContent = "Don't have an account? Sign up";
+            } else {
+                authTitle.textContent = 'Sign up';
+                authSubmit.textContent = 'Sign up';
+                authPassword.autocomplete = 'new-password';
+                authToggleLink.textContent = 'Already have an account? Sign in';
+            }
+        }
+
+        function openAuthModal(mode) {
+            authMode = mode;
+            refreshAuthModalUI();
+            authError.textContent = '';
+            authUsername.value = '';
+            authPassword.value = '';
+            authOverlay.classList.add('open');
+            setTimeout(() => authUsername.focus(), 0);
+        }
+        function closeAuthModal() {
+            authOverlay.classList.remove('open');
+        }
+
+        authCancel.addEventListener('click', closeAuthModal);
+
+        // Click on the backdrop (but not inside the modal box) closes the modal.
+        authOverlay.addEventListener('click', (e) => {
+            if (e.target === authOverlay) closeAuthModal();
+        });
+
+        // Toggle between signin and signup without closing the modal.
+        authToggleLink.addEventListener('click', () => {
+            authMode = (authMode === 'signin') ? 'signup' : 'signin';
+            refreshAuthModalUI();
+            authError.textContent = '';
+        });
+
+        async function submitAuthForm() {
+            const username = authUsername.value.trim();
+            const password = authPassword.value;
+            if (!username || !password) {
+                authError.textContent = 'Username and password required.';
+                return;
+            }
+            authError.textContent = '';
+            authSubmit.disabled = true;
+            try {
+                const result = authMode === 'signin'
+                    ? await authSignIn(username, password)
+                    : await authSignUp(username, password);
+                if (result && result.token && result.user) {
+                    setStoredToken(result.token);
+                    closeAuthModal();
+                    // Disconnect and reconnect so the server sees us authed.
+                    // Safe to do because the modal is only reachable from the
+                    // menu — the player isn't mid-round when this fires.
+                    if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+                    connect();
+                } else {
+                    authError.textContent = friendlyAuthError(result);
+                }
+            } catch (err) {
+                authError.textContent = 'Network error. Check your connection.';
+            } finally {
+                authSubmit.disabled = false;
+            }
+        }
+        authSubmit.addEventListener('click', submitAuthForm);
+        // Enter from either input triggers submit.
+        [authUsername, authPassword].forEach(el => {
+            el.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') submitAuthForm();
+            });
+        });
+
+        // Esc closes the modal.
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && authOverlay.classList.contains('open')) {
+                closeAuthModal();
+            }
+        });
+
+        // Stop pointer events on the auth overlay from reaching the Phaser canvas.
+        authOverlay.addEventListener('pointerdown', e => e.stopPropagation());
+        authOverlay.addEventListener('touchstart', e => e.stopPropagation(), { passive: false });
+
+        // Sign in / sign out button inside the menu.
+        menuAuthBtn.addEventListener('click', () => {
+            if (currentUser) {
+                // Sign out: drop the token and reconnect as anonymous.
+                setStoredToken(null);
+                currentUser = null;
+                updateMenuFromAuth();
+                if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+                connect();
+            } else {
+                openAuthModal('signin');
+            }
+        });
+
+        // ========================================================================
         // Game constants
         // ========================================================================
         const CANVAS_WIDTH = 720;
@@ -364,15 +705,34 @@
 
         function connect() {
             setStatus('connecting...');
-            ws = new WebSocket(wsUrl);
+            // If we have a stored session token, send it on the WS URL. The
+            // server forwards it to the Worker's /auth/verify endpoint and
+            // attaches the resolved user to this connection. Invalid/expired
+            // tokens fall through to anonymous play; we clear them on receipt
+            // of a welcome message with user=null.
+            const token = getStoredToken();
+            const fullUrl = token
+                ? wsUrl + '/?token=' + encodeURIComponent(token)
+                : wsUrl;
+            ws = new WebSocket(fullUrl);
             ws.addEventListener('open', () => setStatus('connected'));
             ws.addEventListener('message', (event) => {
                 let msg;
                 try { msg = JSON.parse(event.data); } catch { return; }
                 if (msg.type === 'welcome') {
                     mySessionId = msg.sessionId;
-                    // Update the hamburger menu player name
-                    document.getElementById('menu-player-name').textContent = 'you are ' + mySessionId;
+                    if (msg.user) {
+                        // Server confirmed our token. Show their display name
+                        // in the menu instead of the bare session id.
+                        currentUser = msg.user;
+                    } else {
+                        // No user attached: either we sent no token, or the
+                        // token we sent was rejected. Clear stale token so
+                        // we don't keep retrying it on reconnects.
+                        if (getStoredToken()) setStoredToken(null);
+                        currentUser = null;
+                    }
+                    updateMenuFromAuth();
                 } else if (msg.type === 'world_init') {
                     if (sceneReady && window.__scene) window.__scene.applyWorldInit(msg);
                     else pendingWorldInit = msg;

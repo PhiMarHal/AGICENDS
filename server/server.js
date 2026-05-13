@@ -5,6 +5,28 @@ const http = require('http');
 const path = require('path');
 const { WebSocketServer } = require('ws');
 
+// ── auth + stats integration ────────────────────────────────────────────
+// When both env vars are set, this server talks to the Cloudflare Worker
+// at AUTH_WORKER_URL to (a) verify session tokens on WebSocket connect
+// and (b) post match results at round end. Both must be set in
+// production:
+//   AUTH_WORKER_URL              — e.g. https://agiscends-auth.foo.workers.dev
+//   GAME_SERVER_SHARED_SECRET    — must equal the secret of the same name
+//                                  set in the Worker via `wrangler secret put`
+// In local dev, leave them unset — everyone plays anonymously and no
+// results get posted. The integration is fully bypassed when AUTH_WORKER_URL
+// is missing, so there's nothing else to disable.
+const AUTH_WORKER_URL = process.env.AUTH_WORKER_URL || null;
+const GAME_SERVER_SHARED_SECRET = process.env.GAME_SERVER_SHARED_SECRET || null;
+if (AUTH_WORKER_URL) {
+    console.log(`[auth] integration enabled, worker = ${AUTH_WORKER_URL}`);
+    if (!GAME_SERVER_SHARED_SECRET) {
+        console.warn('[auth] GAME_SERVER_SHARED_SECRET not set — token verification will work, but match results will not be recorded.');
+    }
+} else {
+    console.log('[auth] integration disabled — anonymous-only, no stat recording.');
+}
+
 const SIM = {
     CANVAS_WIDTH: 720,
     CANVAS_HEIGHT: 1080,
@@ -441,6 +463,8 @@ function generateChunks(world, targetY, elapsedMs) {
 function makePlayer(id) {
     return {
         id,
+        userId: null,         // set by connection handler if the client authenticated
+        displayName: null,    // ditto
         x: SIM.CANVAS_WIDTH / 2,
         y: SIM.CANVAS_HEIGHT - SIM.START_Y_OFFSET,
         vx: 0, vy: 0,
@@ -928,6 +952,11 @@ function step(match, deltaSeconds) {
     if (match.hasStarted && match.roundState === ROUND_RUNNING) {
         if (!anyInRound(match) || !anyInRoundAlive(match)) {
             match.roundState = ROUND_OVER;
+            // Fire-and-forget — runs in parallel with the next tick.
+            // Never blocks the game loop, even on slow networks.
+            recordMatchResults(match).catch(err =>
+                console.error('[stats] unexpected error:', err)
+            );
         }
     }
 }
@@ -1078,20 +1107,117 @@ function newSessionId(match) {
     return 'p' + n + '-' + suffix;
 }
 
-wss.on('connection', (ws) => {
+// ── auth + stats helpers ────────────────────────────────────────────────
+
+// POSTs a JWT to the Worker's /auth/verify endpoint. Returns
+// { id, display_name } on success, or null on any failure (no token,
+// integration disabled, network error, invalid/expired token, etc).
+// All failure modes collapse to "play as anonymous" — never throws.
+async function verifyAuthToken(token) {
+    if (!AUTH_WORKER_URL || !token) return null;
+    try {
+        const res = await fetch(`${AUTH_WORKER_URL}/auth/verify`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ token }),
+        });
+        const data = await res.json();
+        if (data && data.ok && data.user) {
+            return { id: data.user.id, display_name: data.user.display_name };
+        }
+    } catch (err) {
+        console.warn('[auth] verify error:', err.message);
+    }
+    return null;
+}
+
+// POSTs the results of a finished round to the Worker's /stats/record.
+// Builds the player list from match.players (anyone with inRound=true),
+// computes ranks from scores, and fires the request without awaiting it
+// from the caller's perspective. Errors are logged and swallowed.
+async function recordMatchResults(match) {
+    if (!AUTH_WORKER_URL || !GAME_SERVER_SHARED_SECRET) return;
+
+    const players = [];
+    for (const p of match.players.values()) {
+        if (!p.inRound) continue;
+        const entry = {
+            display_name: p.displayName || p.id,
+            final_score: Math.round(p.score || 0),
+            finishing_rank: 0,        // filled in below after sorting
+        };
+        if (p.userId) entry.user_id = p.userId;
+        players.push(entry);
+    }
+    if (players.length === 0) return;
+
+    // Standard competition ranking: ties share a rank, the next rank
+    // skips by however many tied. e.g. 100, 80, 80, 50 → 1, 2, 2, 4.
+    players.sort((a, b) => b.final_score - a.final_score);
+    let rank = 1;
+    for (let i = 0; i < players.length; i++) {
+        if (i > 0 && players[i].final_score < players[i - 1].final_score) {
+            rank = i + 1;
+        }
+        players[i].finishing_rank = rank;
+    }
+
+    try {
+        const res = await fetch(`${AUTH_WORKER_URL}/stats/record`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                'x-game-server-secret': GAME_SERVER_SHARED_SECRET,
+            },
+            body: JSON.stringify({
+                mode: 'devils',       // competitive; will branch when angels (co-op) lands
+                ended_at: Date.now(),
+                players,
+            }),
+        });
+        if (res.ok) {
+            const data = await res.json();
+            console.log(`[stats] match recorded (id=${data.match_id}, ${players.length} player(s))`);
+        } else {
+            console.warn(`[stats] record failed: ${res.status} ${await res.text()}`);
+        }
+    } catch (err) {
+        console.warn('[stats] network error recording match:', err.message);
+    }
+}
+
+wss.on('connection', async (ws, request) => {
     // Reject if we've hit the hard connection cap.
     if (wss.clients.size > SIM.MAX_CONNECTIONS) {
         ws.close(1008, 'Server full');
         return;
     }
 
+    // Token may be passed as ?token=<jwt> on the WebSocket URL. If the
+    // verify call fails or no token is provided, the player just stays
+    // anonymous — same behaviour as before this integration existed.
+    // The await here adds one HTTP round-trip to Cloudflare to the
+    // connection latency (~50-100ms typically); the game tolerates it
+    // since players don't expect instant readiness.
+    const reqUrl = new URL(request.url, 'http://localhost');
+    const token = reqUrl.searchParams.get('token');
+    const authedUser = await verifyAuthToken(token);
+
     const sessionId = newSessionId(match);
     sessionByWs.set(ws, sessionId);
     sideWallSeenByWs.set(ws, 0);
-    addPlayer(match, sessionId);
-    console.log(`[server] ${sessionId} joined (${match.players.size} total, round=${match.roundState})`);
+    const player = addPlayer(match, sessionId);
+    if (authedUser) {
+        player.userId = authedUser.id;
+        player.displayName = authedUser.display_name;
+    }
+    console.log(`[server] ${sessionId} joined as ${authedUser ? authedUser.display_name : 'anon'} (${match.players.size} total, round=${match.roundState})`);
 
-    ws.send(JSON.stringify({ type: 'welcome', sessionId }));
+    ws.send(JSON.stringify({
+        type: 'welcome',
+        sessionId,
+        user: authedUser ? { id: authedUser.id, display_name: authedUser.display_name } : null,
+    }));
     ws.send(JSON.stringify(buildWorldInit(match.world)));
     sideWallSeenByWs.set(ws, match.world.sideWallSegments.length);
 
