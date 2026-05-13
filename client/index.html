@@ -107,8 +107,14 @@
             pointer-events: none;
         }
 
-        /* ── Top scorer (bottom left) ── */
-        #top-scorer {
+        /* ── Scoreboard (bottom left) ──
+           Holds one .scoreboard-line per in-round player who has scored.
+           On wide viewports all lines are visible; on phones, a media query
+           hides everything past the first line to avoid running into the
+           right edge. The 720px breakpoint matches the canvas width: if
+           the viewport is narrower than the canvas, we're effectively in
+           "mobile" layout. */
+        #scoreboard {
             position: fixed;
             bottom: 8px;
             left: 8px;
@@ -123,20 +129,18 @@
             display: none;
         }
 
-        /* ── Second scorer (bottom right) ── */
-        #second-scorer {
-            position: fixed;
-            bottom: 8px;
-            right: 8px;
-            color: #fff;
-            font-family: monospace;
-            font-size: 18px;
-            background: rgba(0, 0, 0, 0.6);
-            padding: 4px 8px;
-            z-index: 10;
-            pointer-events: none;
-            border-radius: 4px;
-            display: none;
+        #scoreboard.has-scores {
+            display: block;
+        }
+
+        #scoreboard .scoreboard-line {
+            white-space: nowrap;
+        }
+
+        @media (max-width: 720px) {
+            #scoreboard .scoreboard-line:nth-child(n+2) {
+                display: none;
+            }
         }
 
         /* ── Auth UI: button inside menu, plus modal ── */
@@ -312,11 +316,8 @@
     <!-- Top right: speaker toggle -->
     <div id="speaker-btn"><span class="icon">🔊</span></div>
 
-    <!-- Bottom left: top scorer -->
-    <div id="top-scorer"></div>
-
-    <!-- Bottom right: second scorer -->
-    <div id="second-scorer"></div>
+    <!-- Bottom left: scoreboard (one line per scoring player; mobile shows leader only) -->
+    <div id="scoreboard"></div>
 
     <script>
         // ========================================================================
@@ -411,8 +412,7 @@
         const menuBtn = document.getElementById('menu-btn');
         const menuPanel = document.getElementById('menu-panel');
         const speakerBtn = document.getElementById('speaker-btn');
-        const topScorerEl = document.getElementById('top-scorer');
-        const secondScorerEl = document.getElementById('second-scorer');
+        const scoreboardEl = document.getElementById('scoreboard');
 
         menuBtn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -1160,7 +1160,7 @@
                     const screenX = this.worldToScreenX(p.x);
                     const distM = Math.floor(Math.abs(p.y - myY) / 50);
                     const distText = distM + 'm';
-                    const nameText = id;
+                    const nameText = p.displayName || id;
                     if (pointsUp) {
                         this.placeProximityIndicator(ind, screenX, true, distText, nameText);
                     } else {
@@ -1580,34 +1580,39 @@
                 if (this.spectatingRightArrow) { this.spectatingRightArrow.destroy(); this.spectatingRightArrow = null; }
             }
 
-            updateTopScorer(players) {
-                // Collect and sort all in-round player scores descending
+            updateScoreboard(players) {
+                // Build a sorted list of every in-round player with a non-zero
+                // score, then render one line per player into #scoreboard. On
+                // narrow viewports a CSS media query hides everything past the
+                // first line — so on mobile this effectively shows the leader,
+                // and on web it shows the full round leaderboard.
                 const scores = [];
                 for (const id in players) {
-                    if (!players[id].inRound) continue;  // skip spectators
+                    if (!players[id].inRound) continue;
+                    const score = players[id].score || 0;
+                    if (score <= 0) continue;
                     scores.push({
                         id,
                         displayName: players[id].displayName,
-                        score: players[id].score || 0,
+                        score,
                     });
                 }
                 scores.sort((a, b) => b.score - a.score);
 
-                if (scores.length > 0 && scores[0].score > 0) {
-                    const name = scores[0].displayName || scores[0].id;
-                    topScorerEl.textContent = name + ' - ' + scores[0].score;
-                    topScorerEl.style.display = 'block';
-                } else {
-                    topScorerEl.style.display = 'none';
+                if (scores.length === 0) {
+                    scoreboardEl.classList.remove('has-scores');
+                    scoreboardEl.replaceChildren();
+                    return;
                 }
 
-                if (scores.length > 1 && scores[1].score > 0) {
-                    const name = scores[1].displayName || scores[1].id;
-                    secondScorerEl.textContent = name + ' - ' + scores[1].score;
-                    secondScorerEl.style.display = 'block';
-                } else {
-                    secondScorerEl.style.display = 'none';
-                }
+                scoreboardEl.classList.add('has-scores');
+                scoreboardEl.replaceChildren(...scores.map(s => {
+                    const line = document.createElement('div');
+                    line.className = 'scoreboard-line';
+                    const name = s.displayName || s.id;
+                    line.textContent = `${name} - ${s.score}`;
+                    return line;
+                }));
             }
 
             applySnapshot(snap) {
@@ -1849,7 +1854,7 @@
                         continue;
                     }
 
-                    this.latestPlayerData.set(id, { x: p.x, y: p.y, alive: p.alive });
+                    this.latestPlayerData.set(id, { x: p.x, y: p.y, alive: p.alive, displayName: p.displayName });
                     let v = this.playerVisuals.get(id);
                     if (!v) {
                         v = this.createPlayerVisual(id, isMe);
@@ -1908,9 +1913,9 @@
                     }
                 }
 
-                // Update top-scorer display every snapshot
+                // Update scoreboard every snapshot
                 if (snap.players) {
-                    this.updateTopScorer(snap.players);
+                    this.updateScoreboard(snap.players);
                 }
 
                 // When spectating, show the leading player's score instead of own (which is 0)
