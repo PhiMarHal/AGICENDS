@@ -483,6 +483,35 @@
             return await res.json();
         }
 
+        // Independently verifies a stored token directly with the Worker, so
+        // the client knows its own auth state without relying on the game
+        // server. Important for local dev: the game server might be running
+        // without AUTH_WORKER_URL set (anon mode), but we're still logged in
+        // — the menu should reflect that. Only clears the stored token if
+        // the Worker explicitly rejects it. Network errors leave it alone.
+        async function ensureAuthState() {
+            if (currentUser) return;
+            const token = getStoredToken();
+            if (!token) return;
+            try {
+                const res = await fetch(AUTH_WORKER_URL + '/auth/verify', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ token }),
+                });
+                const data = await res.json();
+                if (data && data.ok && data.user) {
+                    currentUser = data.user;
+                    updateMenuFromAuth();
+                } else {
+                    // Worker rejected it — bad/expired token, drop it.
+                    setStoredToken(null);
+                }
+            } catch (_) {
+                // Worker unreachable; keep token, stay anon for this session.
+            }
+        }
+
         // Map server error codes to friendly text the user sees in the modal.
         function friendlyAuthError(result) {
             if (!result) return 'Unknown error.';
@@ -576,6 +605,12 @@
                     : await authSignUp(username, password);
                 if (result && result.token && result.user) {
                     setStoredToken(result.token);
+                    // Set client auth state immediately from the response, so
+                    // the menu updates before the reconnect handshake. If the
+                    // game server is in anon mode (no AUTH_WORKER_URL), this
+                    // is still the truth — the Worker confirmed our identity.
+                    currentUser = result.user;
+                    updateMenuFromAuth();
                     closeAuthModal();
                     // Disconnect and reconnect so the server sees us authed.
                     // Safe to do because the modal is only reachable from the
@@ -722,16 +757,14 @@
                 if (msg.type === 'welcome') {
                     mySessionId = msg.sessionId;
                     if (msg.user) {
-                        // Server confirmed our token. Show their display name
-                        // in the menu instead of the bare session id.
+                        // Server verified our token and tagged this session
+                        // with the user. Trust its data.
                         currentUser = msg.user;
-                    } else {
-                        // No user attached: either we sent no token, or the
-                        // token we sent was rejected. Clear stale token so
-                        // we don't keep retrying it on reconnects.
-                        if (getStoredToken()) setStoredToken(null);
-                        currentUser = null;
                     }
+                    // If msg.user is null, do NOT clear our stored token or
+                    // currentUser — the server might just be in anon mode
+                    // (no AUTH_WORKER_URL env var). Token validity is decided
+                    // by ensureAuthState() talking to the Worker directly.
                     updateMenuFromAuth();
                 } else if (msg.type === 'world_init') {
                     if (sceneReady && window.__scene) window.__scene.applyWorldInit(msg);
@@ -847,6 +880,10 @@
                 for (const snap of pendingSnapshots) this.applySnapshot(snap);
                 pendingSnapshots = [];
 
+                // Verify any stored auth token in parallel with connecting.
+                // ensureAuthState updates the menu when it resolves; connect()
+                // doesn't need to wait for it.
+                ensureAuthState();
                 connect();
             }
 
