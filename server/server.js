@@ -981,6 +981,7 @@ function buildSnapshot(match) {
     const players = {};
     for (const p of match.players.values()) {
         players[p.id] = {
+            displayName: p.displayName,   // null for anon; client falls back to p.id
             x: p.x, y: p.y, vx: p.vx, vy: p.vy,
             alive: p.alive, facingRight: p.facingRight, score: p.score,
             stunned: (match.elapsedMs - p.lastStunTime) < SIM.STUN_DURATION_MS,
@@ -1026,7 +1027,7 @@ function buildSnapshot(match) {
     const finalScores = [];
     for (const p of match.players.values()) {
         if (!p.inRound) continue;
-        finalScores.push({ id: p.id, score: p.score });
+        finalScores.push({ id: p.id, displayName: p.displayName, score: p.score });
     }
     finalScores.sort((a, b) => b.score - a.score);
 

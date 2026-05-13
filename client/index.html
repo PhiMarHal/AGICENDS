@@ -1585,19 +1585,25 @@
                 const scores = [];
                 for (const id in players) {
                     if (!players[id].inRound) continue;  // skip spectators
-                    scores.push({ id, score: players[id].score || 0 });
+                    scores.push({
+                        id,
+                        displayName: players[id].displayName,
+                        score: players[id].score || 0,
+                    });
                 }
                 scores.sort((a, b) => b.score - a.score);
 
                 if (scores.length > 0 && scores[0].score > 0) {
-                    topScorerEl.textContent = scores[0].id + ' - ' + scores[0].score;
+                    const name = scores[0].displayName || scores[0].id;
+                    topScorerEl.textContent = name + ' - ' + scores[0].score;
                     topScorerEl.style.display = 'block';
                 } else {
                     topScorerEl.style.display = 'none';
                 }
 
                 if (scores.length > 1 && scores[1].score > 0) {
-                    secondScorerEl.textContent = scores[1].id + ' - ' + scores[1].score;
+                    const name = scores[1].displayName || scores[1].id;
+                    secondScorerEl.textContent = name + ' - ' + scores[1].score;
                     secondScorerEl.style.display = 'block';
                 } else {
                     secondScorerEl.style.display = 'none';
@@ -1636,7 +1642,8 @@
                         for (const pid of snap.readyPlayerIds) {
                             if (!this.countdownReadySet.has(pid)) {
                                 this.countdownReadySet.add(pid);
-                                this.showJoinedNotification(pid);
+                                const name = (snap.players && snap.players[pid] && snap.players[pid].displayName) || pid;
+                                this.showJoinedNotification(name);
                             }
                         }
                     }
@@ -1688,7 +1695,11 @@
 
                     // Update "Spectating [name]" text
                     if (this.spectatingText) {
-                        const name = this.spectatingPlayerId ? this.spectatingPlayerId.split('_')[0] : '';
+                        let name = '';
+                        if (this.spectatingPlayerId) {
+                            const p = snap.players && snap.players[this.spectatingPlayerId];
+                            name = (p && p.displayName) || this.spectatingPlayerId;
+                        }
                         this.spectatingText.setText('Spectating ' + name);
                     }
 
@@ -2060,7 +2071,8 @@
                         const entry = finalScores[i];
                         const rank = (i + 1) + '.';
                         const isMe = entry.id === mySessionId;
-                        const label = `${rank} ${entry.id}${isMe ? ' (you)' : ''}  -  ${entry.score}`;
+                        const name = entry.displayName || entry.id;
+                        const label = `${rank} ${name}${isMe ? ' (you)' : ''}  -  ${entry.score}`;
                         lines[i].setText(label).setVisible(true);
                     } else {
                         lines[i].setVisible(false);
