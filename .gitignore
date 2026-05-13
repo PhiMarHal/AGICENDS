@@ -9,6 +9,10 @@ out/
 # Vite cache
 .vite/
 
+# Cloudflare Workers (wrangler local state + local-only secret overrides)
+.wrangler/
+.dev.vars
+
 # Environment files (may contain secrets, server URLs, etc.)
 .env
 .env.local
@@ -19,7 +23,6 @@ out/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
 
 # OS junk
 .DS_Store
