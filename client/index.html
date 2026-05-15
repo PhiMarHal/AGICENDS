@@ -1201,18 +1201,31 @@
                 eyesContainer.setDepth(11);
                 if (!isMe) eyesContainer.setAlpha(0.65);
 
+                // Name label floating above the character. Same font as the
+                // proximity indicator for visual consistency. Lives in world
+                // space (no setScrollFactor) so it tracks the player as the
+                // camera moves. Initial text is empty; the snapshot loop
+                // sets it as soon as we have a display name or session id.
+                const nameText = this.add.text(CANVAS_WIDTH / 2, CANVAS_HEIGHT - 260, '', {
+                    fontFamily: 'Arial', fontSize: '21px', fontStyle: 'bold',
+                    color: '#000000', stroke: '#ffffff', strokeThickness: 3,
+                }).setOrigin(0.5, 0.5).setDepth(12);
+                if (!isMe) nameText.setAlpha(0.65);
+
                 return {
-                    sprite, eyesContainer,
+                    sprite, eyesContainer, nameText,
                     eyeLeft, eyeRight, pupilLeft, pupilRight,
                     currentEye: { x: 0, y: 0 }, targetEye: { x: 0, y: 0 },
                     currentPupil: { x: 0, y: 0 }, targetPupil: { x: 0, y: 0 },
                     lastVx: 0,
+                    lastNameText: '',
                 };
             }
 
             destroyPlayerVisual(v) {
                 v.sprite.destroy();
                 v.eyesContainer.destroy();
+                if (v.nameText) v.nameText.destroy();
             }
 
             resetAllVisualState() {
@@ -1867,6 +1880,16 @@
                         }
                     }
 
+                    // Keep the floating name label in sync with the player's
+                    // current display name. setText is a no-op if the string
+                    // is identical, but we still gate on lastNameText to skip
+                    // the comparison cost on every frame.
+                    const labelName = p.displayName || id;
+                    if (v.lastNameText !== labelName) {
+                        v.nameText.setText(labelName);
+                        v.lastNameText = labelName;
+                    }
+
                     if (isMe) {
                         if (this.myState === null) {
                             this.myState = {
@@ -2022,8 +2045,10 @@
                     overlay: null,
                     title: null,
                     scoreLines: [],
+                    countdownText: null,
                     readyButton: null,
                     readyButtonText: null,
+                    revealTimers: [],     // Phaser TimerEvents — torn down in hideGameOverUI
                 };
 
                 objs.overlay = this.add.rectangle(
@@ -2049,14 +2074,29 @@
                     objs.scoreLines.push(t);
                 }
 
+                // Visible countdown that occupies the READY button's slot until
+                // the gate elapses. It ticks 4 → 3 → 2 → 1 over four seconds,
+                // then disappears as the button becomes interactive. The server
+                // enforces the same 4 s gate, so a click on the button as soon
+                // as it appears will be accepted; an honest user never gets a
+                // stuck WAITING... state.
+                objs.countdownText = this.add.text(
+                    CANVAS_WIDTH / 2, CANVAS_HEIGHT - 160, 'New round in 4...',
+                    {
+                        fontFamily: 'Arial', fontSize: '32px', fontStyle: 'bold',
+                        color: '#ffffff', stroke: '#000000', strokeThickness: 4,
+                    }
+                ).setOrigin(0.5).setScrollFactor(0).setDepth(201);
+
                 objs.readyButton = this.add.rectangle(
                     CANVAS_WIDTH / 2, CANVAS_HEIGHT - 160, 280, 70, 0xffffff
-                ).setScrollFactor(0).setDepth(201).setInteractive({ useHandCursor: true });
+                ).setScrollFactor(0).setDepth(201).setInteractive({ useHandCursor: true })
+                    .setVisible(false);
 
                 objs.readyButtonText = this.add.text(
                     CANVAS_WIDTH / 2, CANVAS_HEIGHT - 160, 'READY',
                     { fontFamily: 'Arial', fontSize: '32px', fontStyle: 'bold', color: '#000000' }
-                ).setOrigin(0.5).setScrollFactor(0).setDepth(202);
+                ).setOrigin(0.5).setScrollFactor(0).setDepth(202).setVisible(false);
 
                 objs.readyButton.on('pointerdown', () => {
                     sendReady();
@@ -2065,10 +2105,43 @@
                 });
 
                 this.gameOverObjs = objs;
-                this.refreshRoundOverScores(finalScores);
+                this.setScoreTexts(finalScores);
+
+                // Staggered reveal of score lines (in parallel with the countdown).
+                // If the overlay is torn down before a timer fires, the guard
+                // inside each callback short-circuits.
+                const STAGGER_FIRST_MS = 1000;
+                const STAGGER_BETWEEN_MS = 150;
+                const numScores = Math.min(finalScores.length, maxLines);
+
+                for (let i = 0; i < numScores; i++) {
+                    const lineIdx = i;
+                    const delay = STAGGER_FIRST_MS + i * STAGGER_BETWEEN_MS;
+                    objs.revealTimers.push(this.time.delayedCall(delay, () => {
+                        if (this.gameOverObjs !== objs) return;
+                        objs.scoreLines[lineIdx].setVisible(true);
+                    }));
+                }
+
+                // Countdown ticks. At each second mark the visible text updates;
+                // at t=4 s the countdown hides and the button appears.
+                const COUNTDOWN_TOTAL_MS = 4000;
+                for (let n = 3; n >= 1; n--) {
+                    const elapsed = (4 - n) * 1000;
+                    objs.revealTimers.push(this.time.delayedCall(elapsed, () => {
+                        if (this.gameOverObjs !== objs) return;
+                        objs.countdownText.setText('New round in ' + n + '...');
+                    }));
+                }
+                objs.revealTimers.push(this.time.delayedCall(COUNTDOWN_TOTAL_MS, () => {
+                    if (this.gameOverObjs !== objs) return;
+                    objs.countdownText.setVisible(false);
+                    objs.readyButton.setVisible(true);
+                    objs.readyButtonText.setVisible(true);
+                }));
             }
 
-            refreshRoundOverScores(finalScores) {
+            setScoreTexts(finalScores) {
                 if (!this.gameOverObjs) return;
                 const lines = this.gameOverObjs.scoreLines;
                 for (let i = 0; i < lines.length; i++) {
@@ -2078,19 +2151,29 @@
                         const isMe = entry.id === mySessionId;
                         const name = entry.displayName || entry.id;
                         const label = `${rank} ${name}${isMe ? ' (you)' : ''}  -  ${entry.score}`;
-                        lines[i].setText(label).setVisible(true);
+                        lines[i].setText(label);
                     } else {
-                        lines[i].setVisible(false);
+                        lines[i].setText('');
                     }
                 }
+            }
+
+            refreshRoundOverScores(finalScores) {
+                // Just update texts on already-existing lines; visibility is
+                // controlled by the reveal timers in showRoundOverUI.
+                this.setScoreTexts(finalScores);
             }
 
             hideGameOverUI() {
                 if (!this.gameOverObjs) return;
                 const o = this.gameOverObjs;
+                if (o.revealTimers) {
+                    for (const t of o.revealTimers) t.remove(false);
+                }
                 if (o.overlay) o.overlay.destroy();
                 if (o.title) o.title.destroy();
                 for (const t of o.scoreLines) t.destroy();
+                if (o.countdownText) o.countdownText.destroy();
                 if (o.readyButton) o.readyButton.destroy();
                 if (o.readyButtonText) o.readyButtonText.destroy();
                 this.gameOverObjs = null;
@@ -2163,6 +2246,8 @@
                     v.sprite.y = sample.y;
                     v.eyesContainer.x = sample.x;
                     v.eyesContainer.y = sample.y;
+                    v.nameText.x = sample.x;
+                    v.nameText.y = sample.y - 60;
 
                     const prevVx = v.lastVx;
                     if (Math.abs(sample.vx) > 50 && Math.sign(sample.vx) !== Math.sign(prevVx) && sample.alive) {
@@ -2295,6 +2380,8 @@
                         myV.sprite.y = this.myState.y;
                         myV.eyesContainer.x = this.myState.x;
                         myV.eyesContainer.y = this.myState.y;
+                        myV.nameText.x = this.myState.x;
+                        myV.nameText.y = this.myState.y - 60;
 
                         myV.targetEye.x = Phaser.Math.Clamp(this.myState.vx / 20, -6, 6);
                         myV.targetEye.y = Phaser.Math.Clamp(this.myState.vy / 40, -4, 4);

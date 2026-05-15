@@ -952,6 +952,7 @@ function step(match, deltaSeconds) {
     if (match.hasStarted && match.roundState === ROUND_RUNNING) {
         if (!anyInRound(match) || !anyInRoundAlive(match)) {
             match.roundState = ROUND_OVER;
+            match.roundOverAtMs = Date.now();   // gates how soon ready clicks are accepted
             // Fire-and-forget — runs in parallel with the next tick.
             // Never blocks the game loop, even on slow networks.
             recordMatchResults(match).catch(err =>
@@ -1247,6 +1248,19 @@ wss.on('connection', async (ws, request) => {
             } else if (match.roundState === ROUND_OVER) {
                 // Same as ROUND_WAITING: the clicking player triggers a fresh
                 // round; others have 10 s to also click READY.
+                //
+                // But: enforce a minimum delay since ROUND_OVER so a savvy
+                // client (one that bypasses the UI) can't skip the score
+                // reveal and force an instant restart on the rest of us.
+                // The client shows a visible 4-second countdown in place of
+                // the READY button; this gate matches it exactly. An honest
+                // UI click lands right when the server starts accepting.
+                const MIN_ROUND_OVER_TO_READY_MS = 4000;
+                const sinceOver = Date.now() - (match.roundOverAtMs || 0);
+                if (sinceOver < MIN_ROUND_OVER_TO_READY_MS) {
+                    // Ignore silently — log at debug volume if you want.
+                    return;
+                }
                 resetMatch(match);
                 beginCountdown(match, sessionId);
             }
