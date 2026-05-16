@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS users (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     display_name    TEXT    NOT NULL COLLATE NOCASE,
     status          TEXT    NOT NULL DEFAULT 'active',
+    mmr             INTEGER NOT NULL DEFAULT 1500,             -- pairwise-Elo skill rating
     created_at      INTEGER NOT NULL                          -- unix epoch ms
 );
 

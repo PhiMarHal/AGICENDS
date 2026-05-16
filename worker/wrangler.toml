@@ -35,7 +35,7 @@ id = "7b1fe26978454b47a8d4d7751499dc67"
 [vars]
 # Comma-separated origins allowed to call the Worker from a browser. Add
 # your real domain when you have one. localhost:2567 is the game's dev port.
-ALLOWED_ORIGINS = "http://localhost:2567"
+ALLOWED_ORIGINS = "http://localhost:2567,http://192.168.1.11:2567"
 
 # Flip to "false" to stop new bespoke (username+password) signups while
 # leaving existing accounts working. Useful if bot signups appear.

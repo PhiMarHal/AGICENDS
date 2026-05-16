@@ -74,7 +74,88 @@ export async function recordMatch(request, env) {
         return json({ error: 'players_insert_failed' }, 500);
     }
 
+    // ── MMR update ────────────────────────────────────────────────────
+    // Pairwise Elo, K=32, computed only over authenticated players. Anons
+    // (no user_id) are invisible to the calculation. If anyone's user_id
+    // doesn't resolve in the users table (e.g. account deleted between
+    // /auth/verify and now), we drop them too — they're treated as anon
+    // for this match. MMR failures don't fail the match record: the
+    // match is already saved, and the worst case here is one round
+    // missing rating updates.
+    try {
+        await updateMmrForMatch(env, players);
+    } catch (err) {
+        console.error('mmr update failed for match', matchId, err);
+    }
+
     return json({ ok: true, match_id: matchId });
+}
+
+// Pairwise Elo update for authed players in a finished match. Returns
+// quietly if there are fewer than 2 valid authed players (nothing to
+// compute). Persists changes in a single batched transaction.
+async function updateMmrForMatch(env, players) {
+    const K = 32;
+
+    const authed = players.filter(p => p.user_id != null);
+    if (authed.length < 2) return;
+
+    // Fetch current MMRs for everyone we need.
+    const ids = authed.map(p => p.user_id);
+    const placeholders = ids.map(() => '?').join(',');
+    const rows = await all(env,
+        `SELECT id, mmr FROM users WHERE id IN (${placeholders})`,
+        ...ids
+    );
+    const mmrById = new Map();
+    for (const r of rows) mmrById.set(r.id, r.mmr);
+
+    // Filter out any user_id we couldn't find (deleted accounts, etc.).
+    const valid = authed.filter(p => mmrById.has(p.user_id));
+    if (valid.length < 2) return;
+
+    // Compute pairwise deltas. We accumulate floats and only round at
+    // the end so small per-pair contributions don't all collapse to 0.
+    const deltas = new Map();
+    for (const p of valid) deltas.set(p.user_id, 0);
+
+    for (let i = 0; i < valid.length; i++) {
+        for (let j = i + 1; j < valid.length; j++) {
+            const a = valid[i], b = valid[j];
+            const Ra = mmrById.get(a.user_id);
+            const Rb = mmrById.get(b.user_id);
+
+            // Pairwise outcome from absolute finishing rank:
+            //   a finished higher  → a wins the pair
+            //   b finished higher  → b wins the pair
+            //   tied (same rank)   → both get 0.5
+            let sa;
+            if (a.finishing_rank < b.finishing_rank) sa = 1;
+            else if (a.finishing_rank > b.finishing_rank) sa = 0;
+            else sa = 0.5;
+            const sb = 1 - sa;
+
+            const Ea = 1 / (1 + Math.pow(10, (Rb - Ra) / 400));
+            const Eb = 1 - Ea;
+
+            deltas.set(a.user_id, deltas.get(a.user_id) + K * (sa - Ea));
+            deltas.set(b.user_id, deltas.get(b.user_id) + K * (sb - Eb));
+        }
+    }
+
+    // Round to integers and batch-write.
+    const updateStmts = [];
+    for (const [uid, delta] of deltas) {
+        const rounded = Math.round(delta);
+        if (rounded === 0) continue;
+        updateStmts.push(
+            env.DB.prepare('UPDATE users SET mmr = mmr + ? WHERE id = ?')
+                .bind(rounded, uid)
+        );
+    }
+    if (updateStmts.length > 0) {
+        await env.DB.batch(updateStmts);
+    }
 }
 
 // Returns { error, message } on failure or { match } on success.
@@ -140,7 +221,7 @@ export async function getUserStats(_request, env, _ctx, params) {
     }
 
     const user = await one(env,
-        'SELECT id, display_name FROM users WHERE id = ?',
+        'SELECT id, display_name, mmr FROM users WHERE id = ?',
         userId,
     );
     if (!user) {
@@ -173,7 +254,7 @@ export async function getUserStats(_request, env, _ctx, params) {
     );
 
     return json({
-        user: { id: user.id, display_name: user.display_name },
+        user: { id: user.id, display_name: user.display_name, mmr: user.mmr },
         stats: {
             matches_played: agg.matches_played || 0,
             wins: agg.wins || 0,
