@@ -412,6 +412,111 @@
                 max-height: none;
             }
         }
+
+        /* ── Mode picker (ANGELS / DEVILS) ─────────────────────────────
+           Shown on page load and again whenever the user clicks
+           "Switch mode" in the menu. No localStorage persistence — every
+           reload presents the choice fresh. */
+        #mode-picker-overlay {
+            display: flex;
+            position: fixed;
+            inset: 0;
+            background: #000;
+            z-index: 100;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-family: monospace;
+        }
+
+        #mode-picker-overlay.hidden {
+            display: none;
+        }
+
+        #mode-picker-content {
+            text-align: center;
+        }
+
+        #mode-picker-content h1 {
+            font-size: 22px;
+            font-weight: normal;
+            letter-spacing: 3px;
+            margin: 0 0 28px 0;
+            color: #ccc;
+        }
+
+        .mode-picker-buttons {
+            display: flex;
+            gap: 24px;
+            justify-content: center;
+            align-items: stretch;
+        }
+
+        .mode-button {
+            width: 220px;
+            height: 280px;
+            background: #111;
+            color: #fff;
+            border: 2px solid #444;
+            cursor: pointer;
+            font-family: monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 14px;
+            transition: transform 0.1s, border-color 0.1s, background 0.1s;
+        }
+
+        .mode-button:hover {
+            transform: scale(1.03);
+            background: #1a1a1a;
+        }
+
+        .mode-button[data-mode="devils"]:hover {
+            border-color: #ff5252;
+        }
+
+        .mode-button[data-mode="angels"]:hover {
+            border-color: #4fc3f7;
+        }
+
+        .mode-button-title {
+            font-size: 36px;
+            font-weight: bold;
+            letter-spacing: 3px;
+        }
+
+        .mode-button-subtitle {
+            font-size: 13px;
+            color: #999;
+            letter-spacing: 1px;
+        }
+
+        @media (max-width: 600px) {
+            .mode-picker-buttons {
+                flex-direction: column;
+            }
+
+            .mode-button {
+                width: 220px;
+                height: 140px;
+            }
+        }
+
+        /* "Switch mode" link in the menu, same style as Leaderboards */
+        #menu-switch-mode-link {
+            color: #ccc;
+            font-family: monospace;
+            font-size: 13px;
+            text-decoration: underline;
+            cursor: pointer;
+            padding: 2px 0;
+        }
+
+        #menu-switch-mode-link:hover {
+            color: #fff;
+        }
     </style>
 </head>
 
@@ -426,7 +531,26 @@
         <button id="menu-auth-btn">Sign in</button>
         <div id="menu-mmr" style="display:none">1500 MMR</div>
         <hr>
+        <div id="menu-switch-mode-link">Switch mode (DEVILS)</div>
         <div id="menu-leaderboard-link">Leaderboards</div>
+    </div>
+
+    <!-- Mode picker — visible on every page load, also re-summoned from
+         the menu's "Switch mode" entry. -->
+    <div id="mode-picker-overlay">
+        <div id="mode-picker-content">
+            <h1>CHOOSE YOUR MODE</h1>
+            <div class="mode-picker-buttons">
+                <button class="mode-button" data-mode="devils">
+                    <span class="mode-button-title">DEVILS</span>
+                    <span class="mode-button-subtitle">competitive</span>
+                </button>
+                <button class="mode-button" data-mode="angels">
+                    <span class="mode-button-title">ANGELS</span>
+                    <span class="mode-button-subtitle">cooperative</span>
+                </button>
+            </div>
+        </div>
     </div>
 
     <!-- Leaderboard modal: docks right on web, centered on mobile -->
@@ -877,6 +1001,56 @@
         leaderboardOverlay.addEventListener('pointerdown', e => e.stopPropagation());
         leaderboardOverlay.addEventListener('touchstart', e => e.stopPropagation(), { passive: false });
 
+        // ── Mode picker (ANGELS / DEVILS) ─────────────────────────────
+        const modePickerOverlay = document.getElementById('mode-picker-overlay');
+        const menuSwitchModeLink = document.getElementById('menu-switch-mode-link');
+        // The picker is non-dismissable on first load (you have to pick) and
+        // dismissable when re-opened from the menu (you might change your
+        // mind, in which case nothing happens and your session continues).
+        let modePickerCancelable = false;
+
+        function showModePicker(cancelable) {
+            modePickerCancelable = !!cancelable;
+            modePickerOverlay.classList.remove('hidden');
+        }
+        function hideModePicker() {
+            modePickerOverlay.classList.add('hidden');
+        }
+        function updateModeSwitchLink() {
+            if (!menuSwitchModeLink) return;
+            const label = currentMode ? '(' + currentMode.toUpperCase() + ')' : '';
+            menuSwitchModeLink.textContent = ('Switch mode ' + label).trim();
+        }
+        function selectMode(mode) {
+            hideModePicker();
+            // No-op if they picked the same mode and we already have a live
+            // connection — saves the reconnect churn.
+            if (mode === currentMode && ws && ws.readyState === WebSocket.OPEN) {
+                return;
+            }
+            currentMode = mode;
+            updateModeSwitchLink();
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+            }
+            connect();
+        }
+
+        document.querySelectorAll('.mode-button').forEach(btn => {
+            btn.addEventListener('click', () => selectMode(btn.dataset.mode));
+        });
+        menuSwitchModeLink.addEventListener('click', () => showModePicker(true));
+        modePickerOverlay.addEventListener('click', (e) => {
+            if (modePickerCancelable && e.target === modePickerOverlay) hideModePicker();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' &&
+                !modePickerOverlay.classList.contains('hidden') &&
+                modePickerCancelable) {
+                hideModePicker();
+            }
+        });
+
         // ========================================================================
         // Game constants
         // ========================================================================
@@ -955,8 +1129,12 @@
         let pendingWorldInit = null;
         let pendingSnapshots = [];
         let sceneReady = false;
+        let currentMode = null;     // 'devils' or 'angels' once the user picks
 
         function connect() {
+            // Bail until the user has picked a mode. The mode picker click
+            // handler will call us back via selectMode().
+            if (!currentMode) return;
             setStatus('connecting...');
             // If we have a stored session token, send it on the WS URL. The
             // server forwards it to the Worker's /auth/verify endpoint and
@@ -964,9 +1142,9 @@
             // tokens fall through to anonymous play; we clear them on receipt
             // of a welcome message with user=null.
             const token = getStoredToken();
-            const fullUrl = token
-                ? wsUrl + '/?token=' + encodeURIComponent(token)
-                : wsUrl;
+            const params = ['mode=' + currentMode];
+            if (token) params.push('token=' + encodeURIComponent(token));
+            const fullUrl = wsUrl + '/?' + params.join('&');
             ws = new WebSocket(fullUrl);
             ws.addEventListener('open', () => setStatus('connected'));
             ws.addEventListener('message', (event) => {
@@ -974,6 +1152,10 @@
                 try { msg = JSON.parse(event.data); } catch { return; }
                 if (msg.type === 'welcome') {
                     mySessionId = msg.sessionId;
+                    if (msg.mode) {
+                        currentMode = msg.mode;
+                        updateModeSwitchLink();
+                    }
                     if (msg.user) {
                         // Server verified our token and tagged this session
                         // with the user. Trust its data.
@@ -992,6 +1174,13 @@
                     else pendingSnapshots.push(msg);
                 } else if (msg.type === 'mmr_update') {
                     if (sceneReady && window.__scene) window.__scene.applyMmrUpdate(msg.changes);
+                    // If the leaderboard is open, refetch — a match just
+                    // completed, so the data is stale. The Worker has
+                    // already finished writing by the time this message
+                    // arrives, so no extra delay needed.
+                    if (leaderboardOverlay.classList.contains('open')) {
+                        openLeaderboard();
+                    }
                 }
             });
             ws.addEventListener('close', () => setStatus('disconnected'));
