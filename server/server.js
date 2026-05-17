@@ -555,6 +555,12 @@ function resetMatch(match) {
     match.countdownEndsAtMs = Infinity;
     match.readyPlayers = new Set();
     match.teamScore = 0;
+    // Drop any ghosts left over from the previous round (mid-round
+    // disconnects). They appeared on the GAME OVER scoreboard but they
+    // shouldn't carry over into the fresh round.
+    for (const [id, p] of match.players) {
+        if (p.disconnected) match.players.delete(id);
+    }
     for (const p of match.players.values()) {
         resetPlayer(p);
     }
@@ -980,7 +986,9 @@ function step(match, deltaSeconds) {
                 if (q.alive) {
                     // Resurrector = the highest player (lowest y).
                     if (!resurrector || q.y < resurrector.y) resurrector = q;
-                } else if (q.deathTime != null) {
+                } else if (q.deathTime != null && !q.disconnected) {
+                    // Skip ghosts — they're gone, no point bringing back a
+                    // disconnected client into the team.
                     if (!deadEarliest || q.deathTime < deadEarliest.deathTime) deadEarliest = q;
                 }
             }
@@ -1365,11 +1373,36 @@ wss.on('connection', async (ws, request) => {
         sessionByWs.delete(ws);
         sideWallSeenByWs.delete(ws);
         match.clients.delete(ws);
+
+        const p = match.players.get(sessionId);
+
+        if (p && match.roundState === ROUND_RUNNING && p.inRound) {
+            // Player committed to this round — keep them in match.players so
+            // they appear on the game-over scoreboard and get recorded in
+            // stats. Kill them now (no resurrection in Angels) and tag them
+            // disconnected so cleanup can find them later. This prevents the
+            // "switch mode / close tab to avoid a loss" exploit.
+            p.alive = false;
+            if (p.deathTime == null) p.deathTime = match.elapsedMs;
+            p.disconnected = true;
+            console.log(`[server] ${sessionId} disconnected mid-${match.mode} (committed as dead participant)`);
+            return;
+        }
+
         removePlayer(match, sessionId);
         console.log(`[server] ${sessionId} left ${match.mode} (${match.players.size} total, round=${match.roundState})`);
-        if (match.roundState === ROUND_OVER && !anyPlayers(match)) {
-            console.log(`[server] all ${match.mode} players gone during ROUND_OVER — auto-resetting`);
-            resetMatch(match);
+
+        if (match.roundState === ROUND_OVER) {
+            // Auto-reset only if no *real* (non-ghost) players remain. Ghosts
+            // will be cleaned up by resetMatch when that fires.
+            let hasReal = false;
+            for (const q of match.players.values()) {
+                if (!q.disconnected) { hasReal = true; break; }
+            }
+            if (!hasReal) {
+                console.log(`[server] all ${match.mode} players gone during ROUND_OVER — auto-resetting`);
+                resetMatch(match);
+            }
         }
     });
 
