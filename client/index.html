@@ -444,14 +444,15 @@
 
         .mode-picker-buttons {
             display: flex;
-            gap: 24px;
+            flex-direction: column;
+            gap: 20px;
             justify-content: center;
             align-items: center;
         }
 
         .mode-button {
-            width: 200px;
-            height: 240px;
+            width: 240px;
+            height: 110px;
             background: #ffffff;
             color: #000000;
             border: 2px solid #ffffff;
@@ -460,7 +461,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 32px;
+            font-size: 30px;
             font-weight: bold;
             letter-spacing: 3px;
             transition: transform 0.1s, background 0.1s;
@@ -472,15 +473,10 @@
         }
 
         @media (max-width: 600px) {
-            .mode-picker-buttons {
-                flex-direction: column;
-                align-items: center;
-            }
-
             .mode-button {
                 width: 220px;
-                height: 120px;
-                font-size: 28px;
+                height: 90px;
+                font-size: 26px;
             }
         }
 
@@ -1296,11 +1292,30 @@
                 for (const snap of pendingSnapshots) this.applySnapshot(snap);
                 pendingSnapshots = [];
 
+                // Render placeholder side walls so the cathedral looks
+                // complete under the mode picker (before any server data
+                // arrives). applyWorldInit's reset logic disposes of these
+                // automatically when the real world_init lands.
+                this.spawnPlaceholderSideWalls();
+
                 // Verify any stored auth token in parallel with connecting.
                 // ensureAuthState updates the menu when it resolves; connect()
                 // doesn't need to wait for it.
                 ensureAuthState();
                 connect();
+            }
+
+            spawnPlaceholderSideWalls() {
+                if (this.sideWallSprites.length > 0) return;   // already populated
+                const wt = WALL_THICKNESS;
+                const size = SIDE_WALL_DISPLAY_SIZE;
+                for (let y = 0; y < CANVAS_HEIGHT + size; y += size) {
+                    const left = this.add.image(wt / 2, y, 'block')
+                        .setDisplaySize(size, size).setDepth(2);
+                    const right = this.add.image(CANVAS_WIDTH - wt / 2, y, 'block')
+                        .setDisplaySize(size, size).setDepth(2);
+                    this.sideWallSprites.push(left, right);
+                }
             }
 
             generateTextures() {
@@ -2021,6 +2036,15 @@
             }
 
             updateScoreboard(players) {
+                // In Angels mode the team shares one score, already displayed
+                // in the top counter. The per-player scoreboard would just be
+                // a repeating list of identical numbers — and its absence
+                // doubles as a visual cue that you're in co-op, not versus.
+                if (currentMode === 'angels') {
+                    scoreboardEl.classList.remove('has-scores');
+                    scoreboardEl.replaceChildren();
+                    return;
+                }
                 // Build a sorted list of every in-round player with a non-zero
                 // score, then render one line per player into #scoreboard. On
                 // narrow viewports a CSS media query hides everything past the
@@ -2384,6 +2408,20 @@
                                     this.isSpectating = false;
                                     this.spectatingPlayerId = null;
                                     this.hideSpectatingUI();
+                                }
+                                // Teleport client-side prediction to the
+                                // server's authoritative new position. Without
+                                // this, myState still thinks we're at the
+                                // dead-fall position deep in the spike zone,
+                                // so the sprite — and the camera — render
+                                // there even though server says we're alive.
+                                if (this.myState) {
+                                    this.myState.x = p.x;
+                                    this.myState.y = p.y;
+                                    this.myState.vx = p.vx;
+                                    this.myState.vy = p.vy;
+                                    this.myState.alive = true;
+                                    this.myState.lastFlapTime = -Infinity;
                                 }
                                 this.cameras.main.startFollow(v.sprite, true, 0.1, 0.1);
                                 // Snap interp buffer so the sprite teleports to
@@ -2759,6 +2797,15 @@
                     if (wasAlive !== false && sample.alive === false) {
                         v.sprite.setTint(0xff0000);
                         v.eyesContainer.setVisible(false);
+                    } else if (wasAlive === false && sample.alive === true) {
+                        // Interp caught up to a post-resurrection sample —
+                        // clear the death visuals. Without this branch the
+                        // earlier death-detection would re-fire on every
+                        // stale alive=false sample and leave the player
+                        // looking dead even after the server brought them
+                        // back.
+                        v.sprite.clearTint();
+                        v.eyesContainer.setVisible(true);
                     }
                     this.previousAlive.set(id, sample.alive);
                 }
