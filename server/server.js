@@ -153,6 +153,7 @@ function makeWorld() {
         intervalAltitudes,
         generatedIntervalBarriers: new Set(),
         lastChunkY: SIM.CANVAS_HEIGHT + 200,      // below screen → walls cover full viewport
+        lastWallChunkY: SIM.CANVAS_HEIGHT + 200,  // independent tracker for walls only
         highestGeneratedY: SIM.CANVAS_HEIGHT + 200,
         newBlocks: [], newCoins: [],
         newPentagons: [], newHexagonPairs: [], newHeptagons: [], newOctagons: [],
@@ -322,12 +323,34 @@ function spawnFullRowOfBlocks(world, y) {
     }
 }
 
+// Generate side-wall segments far enough up to cover everything above
+// `targetY` (smaller y = higher on screen). Tracked separately from
+// chunk content so we can pre-fill the visible viewport at world-init
+// time without spawning blocks/coins yet — the staged-reveal we want
+// for the mode picker.
+function generateSideWallsUpTo(world, targetY) {
+    const wallThick = SIM.WALL_THICKNESS;
+    while (world.lastWallChunkY > targetY) {
+        const chunkBottom = world.lastWallChunkY;
+        const chunkTop = chunkBottom - SIM.CANVAS_HEIGHT;
+        for (let y = chunkBottom; y > chunkTop; y -= wallThick) {
+            world.sideWallSegments.push({ y });
+        }
+        world.lastWallChunkY = chunkTop;
+    }
+}
+
 // Spawn the row of blocks players land on at the very start of each round.
 // Placed 160 px below the spawn Y so players have a soft landing without
 // immediately being on top of the platform.
 function spawnStartingPlatform(world) {
     const startY = SIM.CANVAS_HEIGHT - SIM.START_Y_OFFSET;
     spawnFullRowOfBlocks(world, startY + 160);
+    // Also pre-generate enough side walls to cover the visible viewport
+    // so the world looks structurally complete from the moment a client
+    // connects. generateChunks's normal flow will extend walls upward
+    // as the player climbs.
+    generateSideWallsUpTo(world, -SIM.CANVAS_HEIGHT * 0.5);
 }
 
 function spawnIntervalCoinColumns(world, baseY, intervalNumber) {
@@ -398,9 +421,10 @@ function generateChunks(world, targetY, elapsedMs) {
         const chunkBottomAltitude = Math.max(0, startY - chunkBottom);
         const chunkTopAltitude = Math.max(0, startY - chunkTop);
 
-        for (let y = chunkBottom; y > chunkTop; y -= wallThick) {
-            world.sideWallSegments.push({ y });
-        }
+        // Walls are tracked independently of chunks, so the shared helper
+        // can be safely called once per chunk — it'll skip any wall range
+        // already filled in by the world-init pre-pass.
+        generateSideWallsUpTo(world, chunkTop);
 
         for (let i = 0; i < world.intervalAltitudes.length; i++) {
             const intervalAlt = world.intervalAltitudes[i];

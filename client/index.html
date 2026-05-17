@@ -445,14 +445,14 @@
         .mode-picker-buttons {
             display: flex;
             flex-direction: column;
-            gap: 20px;
+            gap: 50px;
             justify-content: center;
             align-items: center;
         }
 
         .mode-button {
-            width: 240px;
-            height: 110px;
+            width: 360px;
+            height: 160px;
             background: #ffffff;
             color: #000000;
             border: 2px solid #ffffff;
@@ -461,9 +461,9 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 30px;
+            font-size: 44px;
             font-weight: bold;
-            letter-spacing: 3px;
+            letter-spacing: 4px;
             transition: transform 0.1s, background 0.1s;
         }
 
@@ -473,10 +473,14 @@
         }
 
         @media (max-width: 600px) {
+            .mode-picker-buttons {
+                gap: 36px;
+            }
+
             .mode-button {
-                width: 220px;
-                height: 90px;
-                font-size: 26px;
+                width: 260px;
+                height: 110px;
+                font-size: 32px;
             }
         }
 
@@ -1309,7 +1313,15 @@
                 if (this.sideWallSprites.length > 0) return;   // already populated
                 const wt = WALL_THICKNESS;
                 const size = SIDE_WALL_DISPLAY_SIZE;
-                for (let y = 0; y < CANVAS_HEIGHT + size; y += size) {
+                // Match the server's wall pattern EXACTLY: start at
+                // CANVAS_HEIGHT + 200 (one chunk below the viewport) and
+                // step up by WALL_THICKNESS. The 0.9 display-size scale
+                // gives the same little inter-segment gap the real walls
+                // have. When the server's world_init lands, applyWorldInit
+                // destroys these placeholders and spawns the real ones at
+                // identical y values, so there's no visible jolt.
+                const startY = CANVAS_HEIGHT + 200;
+                for (let y = startY; y > -wt; y -= wt) {
                     const left = this.add.image(wt / 2, y, 'block')
                         .setDisplaySize(size, size).setDepth(2);
                     const right = this.add.image(CANVAS_WIDTH - wt / 2, y, 'block')
