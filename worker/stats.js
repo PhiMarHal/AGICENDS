@@ -82,23 +82,26 @@ export async function recordMatch(request, env) {
     // for this match. MMR failures don't fail the match record: the
     // match is already saved, and the worst case here is one round
     // missing rating updates.
+    let mmrChanges = {};
     try {
-        await updateMmrForMatch(env, players);
+        mmrChanges = await updateMmrForMatch(env, players);
     } catch (err) {
         console.error('mmr update failed for match', matchId, err);
     }
 
-    return json({ ok: true, match_id: matchId });
+    return json({ ok: true, match_id: matchId, mmr_changes: mmrChanges });
 }
 
 // Pairwise Elo update for authed players in a finished match. Returns
-// quietly if there are fewer than 2 valid authed players (nothing to
-// compute). Persists changes in a single batched transaction.
+// a map of user_id -> {delta, new_mmr} for everyone who participated
+// in the calculation (even zero-delta ones, so the client can show
+// "no change"). Returns {} if fewer than 2 authed players. Persists
+// non-zero deltas in a single batched transaction.
 async function updateMmrForMatch(env, players) {
     const K = 32;
 
     const authed = players.filter(p => p.user_id != null);
-    if (authed.length < 2) return;
+    if (authed.length < 2) return {};
 
     // Fetch current MMRs for everyone we need.
     const ids = authed.map(p => p.user_id);
@@ -112,7 +115,7 @@ async function updateMmrForMatch(env, players) {
 
     // Filter out any user_id we couldn't find (deleted accounts, etc.).
     const valid = authed.filter(p => mmrById.has(p.user_id));
-    if (valid.length < 2) return;
+    if (valid.length < 2) return {};
 
     // Compute pairwise deltas. We accumulate floats and only round at
     // the end so small per-pair contributions don't all collapse to 0.
@@ -143,19 +146,25 @@ async function updateMmrForMatch(env, players) {
         }
     }
 
-    // Round to integers and batch-write.
+    // Round to integers, build return object, and batch-write changes.
+    const result = {};
     const updateStmts = [];
     for (const [uid, delta] of deltas) {
         const rounded = Math.round(delta);
-        if (rounded === 0) continue;
-        updateStmts.push(
-            env.DB.prepare('UPDATE users SET mmr = mmr + ? WHERE id = ?')
-                .bind(rounded, uid)
-        );
+        const oldMmr = mmrById.get(uid);
+        const newMmr = oldMmr + rounded;
+        result[uid] = { delta: rounded, new_mmr: newMmr };
+        if (rounded !== 0) {
+            updateStmts.push(
+                env.DB.prepare('UPDATE users SET mmr = mmr + ? WHERE id = ?')
+                    .bind(rounded, uid)
+            );
+        }
     }
     if (updateStmts.length > 0) {
         await env.DB.batch(updateStmts);
     }
+    return result;
 }
 
 // Returns { error, message } on failure or { match } on success.
@@ -263,6 +272,29 @@ export async function getUserStats(_request, env, _ctx, params) {
         },
         recent_matches: recent,
     });
+}
+
+// ─── GET /stats/leaderboard ────────────────────────────────────────────
+
+export async function getLeaderboard(request, env) {
+    const url = new URL(request.url);
+    let limit = Number.parseInt(url.searchParams.get('limit'), 10);
+    if (!Number.isInteger(limit) || limit <= 0) limit = 100;
+    limit = Math.min(limit, 200);
+
+    // Only active users who've actually played a match. Sort by MMR
+    // descending; tie-break by id (older accounts first) so order is
+    // stable across refreshes.
+    const rows = await all(env,
+        `SELECT u.id, u.display_name, u.mmr
+         FROM users u
+         WHERE u.status = 'active'
+           AND EXISTS (SELECT 1 FROM match_players mp WHERE mp.user_id = u.id)
+         ORDER BY u.mmr DESC, u.id ASC
+         LIMIT ?`,
+        limit,
+    );
+    return json({ players: rows });
 }
 
 // ─── GET /stats/recent ─────────────────────────────────────────────────

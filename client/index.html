@@ -279,6 +279,139 @@
         #auth-toggle-link:hover {
             color: #ccc;
         }
+
+        /* MMR line under Sign Out button */
+        #menu-mmr {
+            color: #ccc;
+            font-family: monospace;
+            font-size: 13px;
+            margin: 6px 0 0 0;
+        }
+
+        /* "Leaderboards" link inside menu — not a button, just clickable text */
+        #menu-leaderboard-link {
+            color: #ccc;
+            font-family: monospace;
+            font-size: 13px;
+            text-decoration: underline;
+            cursor: pointer;
+            padding: 2px 0;
+        }
+
+        #menu-leaderboard-link:hover {
+            color: #fff;
+        }
+
+        /* ── Leaderboard modal ─────────────────────────────────────────
+           Mobile default: centered with backdrop, takes most of the screen.
+           Wide viewports (≥1200px): docks to the right side, transparent
+           backdrop, pointer-events disabled outside the panel so the game
+           stays playable while it's open. */
+        #leaderboard-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 25;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #leaderboard-overlay.open {
+            display: flex;
+        }
+
+        #leaderboard-panel {
+            position: relative;
+            background: rgba(0, 0, 0, 0.95);
+            color: #fff;
+            font-family: monospace;
+            font-size: 13px;
+            padding: 16px 20px;
+            border-radius: 6px;
+            width: 360px;
+            max-width: 90vw;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-sizing: border-box;
+        }
+
+        #leaderboard-panel h2 {
+            margin: 0 0 4px 0;
+            font-size: 16px;
+            font-weight: normal;
+        }
+
+        #leaderboard-close {
+            position: absolute;
+            top: 6px;
+            right: 12px;
+            color: #888;
+            cursor: pointer;
+            font-size: 22px;
+            line-height: 1;
+        }
+
+        #leaderboard-close:hover {
+            color: #fff;
+        }
+
+        #leaderboard-rows {
+            margin-top: 12px;
+        }
+
+        .leaderboard-row {
+            display: flex;
+            padding: 2px 0;
+            white-space: nowrap;
+        }
+
+        .leaderboard-row.me {
+            color: #ffd54f;
+        }
+
+        .leaderboard-rank {
+            width: 36px;
+            color: #888;
+        }
+
+        .leaderboard-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .leaderboard-mmr {
+            width: 60px;
+            text-align: right;
+        }
+
+        .leaderboard-empty {
+            color: #888;
+            padding: 8px 0;
+        }
+
+        @media (min-width: 1200px) {
+            #leaderboard-overlay {
+                inset: auto;
+                top: 0;
+                right: 0;
+                bottom: 0;
+                background: transparent;
+                pointer-events: none;
+                align-items: stretch;
+                justify-content: flex-end;
+            }
+
+            #leaderboard-panel {
+                pointer-events: auto;
+                margin: 16px;
+                width: 420px;
+                max-width: 420px;
+                height: calc(100vh - 32px);
+                max-height: none;
+            }
+        }
     </style>
 </head>
 
@@ -291,6 +424,20 @@
         <span id="menu-player-name">you are …</span>
         <hr>
         <button id="menu-auth-btn">Sign in</button>
+        <div id="menu-mmr" style="display:none">1500 MMR</div>
+        <hr>
+        <div id="menu-leaderboard-link">Leaderboards</div>
+    </div>
+
+    <!-- Leaderboard modal: docks right on web, centered on mobile -->
+    <div id="leaderboard-overlay">
+        <div id="leaderboard-panel">
+            <div id="leaderboard-close" title="Close">×</div>
+            <h2>Top 100</h2>
+            <div id="leaderboard-rows">
+                <div class="leaderboard-empty">Loading…</div>
+            </div>
+        </div>
     </div>
 
     <!-- Auth modal (sign in / sign up). Hidden by default. -->
@@ -528,12 +675,18 @@
         function updateMenuFromAuth() {
             const nameEl = document.getElementById('menu-player-name');
             const btnEl = document.getElementById('menu-auth-btn');
+            const mmrEl = document.getElementById('menu-mmr');
             if (currentUser) {
                 nameEl.textContent = 'you are ' + currentUser.display_name;
                 btnEl.textContent = 'Sign out';
+                if (mmrEl) {
+                    mmrEl.textContent = (currentUser.mmr != null ? currentUser.mmr : 1500) + ' MMR';
+                    mmrEl.style.display = 'block';
+                }
             } else {
                 nameEl.textContent = 'you are ' + (mySessionId || '…');
                 btnEl.textContent = 'Sign in';
+                if (mmrEl) mmrEl.style.display = 'none';
             }
         }
 
@@ -659,6 +812,71 @@
             }
         });
 
+        // ── Leaderboard ───────────────────────────────────────────────
+        const leaderboardOverlay = document.getElementById('leaderboard-overlay');
+        const leaderboardRows = document.getElementById('leaderboard-rows');
+        const leaderboardClose = document.getElementById('leaderboard-close');
+        const menuLeaderboardLink = document.getElementById('menu-leaderboard-link');
+
+        function renderLeaderboardEmpty(text) {
+            const d = document.createElement('div');
+            d.className = 'leaderboard-empty';
+            d.textContent = text;
+            leaderboardRows.replaceChildren(d);
+        }
+        function renderLeaderboard(players) {
+            if (!players || players.length === 0) {
+                renderLeaderboardEmpty('No players yet.');
+                return;
+            }
+            const rows = players.map((p, i) => {
+                const row = document.createElement('div');
+                const isMe = currentUser && currentUser.id === p.id;
+                row.className = 'leaderboard-row' + (isMe ? ' me' : '');
+                const rank = document.createElement('span');
+                rank.className = 'leaderboard-rank';
+                rank.textContent = (i + 1) + '.';
+                const name = document.createElement('span');
+                name.className = 'leaderboard-name';
+                name.textContent = p.display_name;
+                const mmr = document.createElement('span');
+                mmr.className = 'leaderboard-mmr';
+                mmr.textContent = p.mmr;
+                row.appendChild(rank);
+                row.appendChild(name);
+                row.appendChild(mmr);
+                return row;
+            });
+            leaderboardRows.replaceChildren(...rows);
+        }
+        async function openLeaderboard() {
+            leaderboardOverlay.classList.add('open');
+            renderLeaderboardEmpty('Loading…');
+            try {
+                const res = await fetch(AUTH_WORKER_URL + '/stats/leaderboard');
+                const data = await res.json();
+                renderLeaderboard(data.players || []);
+            } catch (err) {
+                renderLeaderboardEmpty('Failed to load.');
+            }
+        }
+        function closeLeaderboard() {
+            leaderboardOverlay.classList.remove('open');
+        }
+        menuLeaderboardLink.addEventListener('click', openLeaderboard);
+        leaderboardClose.addEventListener('click', closeLeaderboard);
+        // Mobile only: click on backdrop closes (web has no clickable backdrop).
+        leaderboardOverlay.addEventListener('click', (e) => {
+            if (e.target === leaderboardOverlay) closeLeaderboard();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && leaderboardOverlay.classList.contains('open')) {
+                closeLeaderboard();
+            }
+        });
+        leaderboardOverlay.addEventListener('pointerdown', e => e.stopPropagation());
+        leaderboardOverlay.addEventListener('touchstart', e => e.stopPropagation(), { passive: false });
+
         // ========================================================================
         // Game constants
         // ========================================================================
@@ -772,6 +990,8 @@
                 } else if (msg.type === 'snapshot') {
                     if (sceneReady && window.__scene) window.__scene.applySnapshot(msg);
                     else pendingSnapshots.push(msg);
+                } else if (msg.type === 'mmr_update') {
+                    if (sceneReady && window.__scene) window.__scene.applyMmrUpdate(msg.changes);
                 }
             });
             ws.addEventListener('close', () => setStatus('disconnected'));
@@ -2045,6 +2265,7 @@
                     overlay: null,
                     title: null,
                     scoreLines: [],
+                    mmrLine: null,
                     countdownText: null,
                     readyButton: null,
                     readyButtonText: null,
@@ -2073,6 +2294,17 @@
                     }).setOrigin(0.5).setScrollFactor(0).setDepth(201).setVisible(false);
                     objs.scoreLines.push(t);
                 }
+
+                // MMR change line, sits just above the READY/countdown slot.
+                // Hidden until the mmr_update message arrives (and only shown
+                // then if the local user participated in MMR for this round).
+                objs.mmrLine = this.add.text(
+                    CANVAS_WIDTH / 2, CANVAS_HEIGHT - 230, '',
+                    {
+                        fontFamily: 'Arial', fontSize: '26px', fontStyle: 'bold',
+                        color: '#ffffff', stroke: '#000000', strokeThickness: 4,
+                    }
+                ).setOrigin(0.5).setScrollFactor(0).setDepth(201).setVisible(false);
 
                 // Visible countdown that occupies the READY button's slot until
                 // the gate elapses. It ticks 4 → 3 → 2 → 1 over four seconds,
@@ -2164,6 +2396,26 @@
                 this.setScoreTexts(finalScores);
             }
 
+            // Called when the server forwards a Worker mmr_update. Always
+            // updates currentUser.mmr if the local user is in the changes,
+            // and fills the GAME OVER mmrLine if the overlay is visible.
+            applyMmrUpdate(changes) {
+                if (!changes || !currentUser) return;
+                const change = changes[String(currentUser.id)];
+                if (!change) return;
+
+                currentUser.mmr = change.new_mmr;
+                updateMenuFromAuth();
+
+                if (this.gameOverObjs && this.gameOverObjs.mmrLine) {
+                    const sign = change.delta > 0 ? '+' : '';
+                    this.gameOverObjs.mmrLine.setText(
+                        sign + change.delta + ' MMR (' + change.new_mmr + ' MMR)'
+                    );
+                    this.gameOverObjs.mmrLine.setVisible(true);
+                }
+            }
+
             hideGameOverUI() {
                 if (!this.gameOverObjs) return;
                 const o = this.gameOverObjs;
@@ -2173,6 +2425,7 @@
                 if (o.overlay) o.overlay.destroy();
                 if (o.title) o.title.destroy();
                 for (const t of o.scoreLines) t.destroy();
+                if (o.mmrLine) o.mmrLine.destroy();
                 if (o.countdownText) o.countdownText.destroy();
                 if (o.readyButton) o.readyButton.destroy();
                 if (o.readyButtonText) o.readyButtonText.destroy();

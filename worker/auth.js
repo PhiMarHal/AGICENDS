@@ -149,7 +149,7 @@ export async function handleVerify(request, env) {
     }
 
     const user = await one(env,
-        'SELECT id, display_name, status FROM users WHERE id = ?',
+        'SELECT id, display_name, status, mmr FROM users WHERE id = ?',
         payload.sub
     );
     if (!user || user.status !== 'active') {
@@ -158,7 +158,7 @@ export async function handleVerify(request, env) {
 
     return json({
         ok: true,
-        user: { id: user.id, display_name: user.display_name },
+        user: { id: user.id, display_name: user.display_name, mmr: user.mmr },
     });
 }
 
@@ -263,7 +263,7 @@ export async function signupBespoke(request, env) {
         userId, 'bespoke', externalId, credential, nowMs,
     );
 
-    const user = { id: userId, display_name: username };
+    const user = { id: userId, display_name: username, mmr: 1500 };
     const token = await issueSession(env, user);
     return json({ token, user });
 }
@@ -282,7 +282,7 @@ export async function signinBespoke(request, env) {
     const externalId = username.toLowerCase();
 
     const row = await one(env,
-        `SELECT ai.credential, u.id AS user_id, u.display_name, u.status
+        `SELECT ai.credential, u.id AS user_id, u.display_name, u.status, u.mmr
          FROM auth_identities ai
          JOIN users u ON u.id = ai.user_id
          WHERE ai.provider = ? AND ai.external_id = ?`,
@@ -302,7 +302,7 @@ export async function signinBespoke(request, env) {
         return json({ error: 'account_disabled' }, 403);
     }
 
-    const user = { id: row.user_id, display_name: row.display_name };
+    const user = { id: row.user_id, display_name: row.display_name, mmr: row.mmr };
     const token = await issueSession(env, user);
     return json({ token, user });
 }

@@ -219,6 +219,7 @@ router.post('/auth/farcaster/verify', auth.farcasterVerify);
 // Stats — server-to-server write, public reads.
 router.post('/stats/record', stats.recordMatch);
 router.get('/stats/user/:id', stats.getUserStats);
+router.get('/stats/leaderboard', stats.getLeaderboard);
 router.get('/stats/recent', stats.getRecentMatches);
 
 // ═══════════════════════════════════════════════════════════════════════

@@ -1125,7 +1125,7 @@ async function verifyAuthToken(token) {
         });
         const data = await res.json();
         if (data && data.ok && data.user) {
-            return { id: data.user.id, display_name: data.user.display_name };
+            return { id: data.user.id, display_name: data.user.display_name, mmr: data.user.mmr };
         }
     } catch (err) {
         console.warn('[auth] verify error:', err.message);
@@ -1180,6 +1180,14 @@ async function recordMatchResults(match) {
         if (res.ok) {
             const data = await res.json();
             console.log(`[stats] match recorded (id=${data.match_id}, ${players.length} player(s))`);
+            // Broadcast MMR changes (if any) so clients can show "+X MMR"
+            // on their GAME OVER overlay and keep their menu MMR fresh.
+            if (data.mmr_changes && Object.keys(data.mmr_changes).length > 0) {
+                const msg = JSON.stringify({ type: 'mmr_update', changes: data.mmr_changes });
+                for (const client of wss.clients) {
+                    if (client.readyState === 1) client.send(msg);  // 1 = OPEN
+                }
+            }
         } else {
             console.warn(`[stats] record failed: ${res.status} ${await res.text()}`);
         }
@@ -1218,7 +1226,7 @@ wss.on('connection', async (ws, request) => {
     ws.send(JSON.stringify({
         type: 'welcome',
         sessionId,
-        user: authedUser ? { id: authedUser.id, display_name: authedUser.display_name } : null,
+        user: authedUser ? { id: authedUser.id, display_name: authedUser.display_name, mmr: authedUser.mmr } : null,
     }));
     ws.send(JSON.stringify(buildWorldInit(match.world)));
     sideWallSeenByWs.set(ws, match.world.sideWallSegments.length);
