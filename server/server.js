@@ -492,6 +492,7 @@ function resetPlayer(p) {
     p.nextFlapDirection = 1;
     p.lastStunTime = -Infinity;
     p.inRound = false;
+    p.deathTime = null;          // match.elapsedMs at moment of death; null while alive
 }
 
 function makeMatch() {
@@ -510,6 +511,7 @@ function makeMatch() {
         countdownEndsAtMs: Infinity,
         pendingWorldInitForAll: false,
         readyPlayers: new Set(),   // session IDs that clicked READY for this round
+        teamScore: 0,              // Angels: shared score across the team. Unused in Devils.
     };
 }
 
@@ -519,6 +521,17 @@ function addPlayer(match, id) {
     return p;
 }
 function removePlayer(match, id) { match.players.delete(id); }
+
+// Single point for crediting score during play. Devils: only the scorer
+// gains points. Angels: the team gains points, every individual player's
+// `score` field stays 0 — display + recording read match.teamScore.
+function awardScore(match, scorer, amount) {
+    if (match.mode === 'angels') {
+        match.teamScore += amount;
+    } else {
+        scorer.score += amount;
+    }
+}
 
 function queueFlap(match, id) {
     if (match.roundState !== ROUND_RUNNING) return;
@@ -541,6 +554,7 @@ function resetMatch(match) {
     match.roundState = ROUND_WAITING;
     match.countdownEndsAtMs = Infinity;
     match.readyPlayers = new Set();
+    match.teamScore = 0;
     for (const p of match.players.values()) {
         resetPlayer(p);
     }
@@ -831,7 +845,7 @@ function step(match, deltaSeconds) {
             if (dx * dx + dy * dy < coinPickRadiusSq) {
                 w.coins.delete(coin.id);
                 w.removedCoinIds.push(coin.id);
-                p.score += 4;
+                awardScore(match, p, 4);
                 match.eventsThisTick.push({ type: 'coin_collected', x: coin.x, y: coin.y, by: p.id });
             }
         }
@@ -912,6 +926,7 @@ function step(match, deltaSeconds) {
 
         if (p.y > match.spikeY) {
             p.alive = false;
+            p.deathTime = match.elapsedMs;
             match.eventsThisTick.push({ type: 'death', playerId: p.id });
         }
     }
@@ -946,6 +961,44 @@ function step(match, deltaSeconds) {
             match.hazardSpeed = SIM.HAZARD_BASE_SPEED + (cycle * SIM.HAZARD_INCREASE);
         }
         match.eventsThisTick.push({ type: 'interval_reached', n: intervalNumber });
+
+        // ── Angels rolling resurrection ─────────────────────────────────
+        // First-time crossing of any interval brings back the player who
+        // died earliest. The newly-alive player materializes right on the
+        // crossing player ("resurrector") with zero velocity — no invuln,
+        // no ready-up. They're back in the fight immediately.
+        //
+        // If multiple intervals are crossed in a single tick (rare but
+        // possible on a hard flap), each iteration of this while loop
+        // rezzes one player, in death-order. That feels right: the chain
+        // gets longer, the rewards stack.
+        if (match.mode === 'angels') {
+            let resurrector = null;
+            let deadEarliest = null;
+            for (const q of match.players.values()) {
+                if (!q.inRound) continue;
+                if (q.alive) {
+                    // Resurrector = the highest player (lowest y).
+                    if (!resurrector || q.y < resurrector.y) resurrector = q;
+                } else if (q.deathTime != null) {
+                    if (!deadEarliest || q.deathTime < deadEarliest.deathTime) deadEarliest = q;
+                }
+            }
+            if (resurrector && deadEarliest) {
+                deadEarliest.alive = true;
+                deadEarliest.x = resurrector.x;
+                deadEarliest.y = resurrector.y;
+                deadEarliest.vx = 0;
+                deadEarliest.vy = 0;
+                deadEarliest.deathTime = null;
+                deadEarliest.lastStunTime = -Infinity;
+                match.eventsThisTick.push({
+                    type: 'resurrected',
+                    playerId: deadEarliest.id,
+                    by: resurrector.id,
+                });
+            }
+        }
     }
 
     // Round over when all participants are dead (or none remain connected).
@@ -980,11 +1033,13 @@ function buildSnapshot(match) {
     // All connected players are sent (inRound flag tells client who is
     // participating). Spectators stay at spawn position with alive=false.
     const players = {};
+    const angelsTeamScore = match.mode === 'angels' ? match.teamScore : null;
     for (const p of match.players.values()) {
         players[p.id] = {
             displayName: p.displayName,   // null for anon; client falls back to p.id
             x: p.x, y: p.y, vx: p.vx, vy: p.vy,
-            alive: p.alive, facingRight: p.facingRight, score: p.score,
+            alive: p.alive, facingRight: p.facingRight,
+            score: angelsTeamScore != null ? angelsTeamScore : p.score,
             stunned: (match.elapsedMs - p.lastStunTime) < SIM.STUN_DURATION_MS,
             inRound: p.inRound,
             pendingInRound: !p.inRound && match.readyPlayers.has(p.id),
@@ -1025,10 +1080,13 @@ function buildSnapshot(match) {
     }
 
     // Only include round participants in the final scoreboard.
+    // In Angels every in-round player shares the team score, which yields
+    // dense rank=1 across the team after the sort below.
     const finalScores = [];
     for (const p of match.players.values()) {
         if (!p.inRound) continue;
-        finalScores.push({ id: p.id, displayName: p.displayName, score: p.score });
+        const score = match.mode === 'angels' ? match.teamScore : p.score;
+        finalScores.push({ id: p.id, displayName: p.displayName, score });
     }
     finalScores.sort((a, b) => b.score - a.score);
 
@@ -1151,12 +1209,14 @@ async function verifyAuthToken(token) {
 async function recordMatchResults(match) {
     if (!AUTH_WORKER_URL || !GAME_SERVER_SHARED_SECRET) return;
 
+    const isAngels = match.mode === 'angels';
     const players = [];
     for (const p of match.players.values()) {
         if (!p.inRound) continue;
+        const finalScore = isAngels ? match.teamScore : p.score;
         const entry = {
             display_name: p.displayName || p.id,
-            final_score: Math.round(p.score || 0),
+            final_score: Math.round(finalScore || 0),
             finishing_rank: 0,        // filled in below after sorting
         };
         if (p.userId) entry.user_id = p.userId;
@@ -1166,6 +1226,9 @@ async function recordMatchResults(match) {
 
     // Standard competition ranking: ties share a rank, the next rank
     // skips by however many tied. e.g. 100, 80, 80, 50 → 1, 2, 2, 4.
+    // In Angels every player ties at the team score, so they all get
+    // rank=1 — which is what the Angels leaderboard later uses to group
+    // teammates together.
     players.sort((a, b) => b.final_score - a.final_score);
     let rank = 1;
     for (let i = 0; i < players.length; i++) {
@@ -1183,7 +1246,7 @@ async function recordMatchResults(match) {
                 'x-game-server-secret': GAME_SERVER_SHARED_SECRET,
             },
             body: JSON.stringify({
-                mode: 'devils',       // competitive; will branch when angels (co-op) lands
+                mode: match.mode,
                 ended_at: Date.now(),
                 players,
             }),
