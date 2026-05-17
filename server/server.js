@@ -1093,7 +1093,18 @@ app.use(express.static(CLIENT_DIR));
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-const match = makeMatch();
+// Two concurrent matches, one per mode. Players are routed by the
+// `?mode=` query parameter on the WebSocket URL. Devils and Angels
+// run independently — separate worlds, separate scores, separate
+// readiness lobbies. Empty matches still tick, but the cost is trivial.
+const matches = {};
+for (const mode of ['devils', 'angels']) {
+    const m = makeMatch();
+    m.mode = mode;
+    m.clients = new Set();     // WS connections currently in this match
+    matches[mode] = m;
+}
+
 const sessionByWs = new Map();
 const sideWallSeenByWs = new Map();
 
@@ -1182,9 +1193,11 @@ async function recordMatchResults(match) {
             console.log(`[stats] match recorded (id=${data.match_id}, ${players.length} player(s))`);
             // Broadcast MMR changes (if any) so clients can show "+X MMR"
             // on their GAME OVER overlay and keep their menu MMR fresh.
+            // Scoped to the finishing match — the other mode's room
+            // shouldn't see this message.
             if (data.mmr_changes && Object.keys(data.mmr_changes).length > 0) {
                 const msg = JSON.stringify({ type: 'mmr_update', changes: data.mmr_changes });
-                for (const client of wss.clients) {
+                for (const client of match.clients) {
                     if (client.readyState === 1) client.send(msg);  // 1 = OPEN
                 }
             }
@@ -1197,7 +1210,7 @@ async function recordMatchResults(match) {
 }
 
 wss.on('connection', async (ws, request) => {
-    // Reject if we've hit the hard connection cap.
+    // Reject if we've hit the hard connection cap across all matches.
     if (wss.clients.size > SIM.MAX_CONNECTIONS) {
         ws.close(1008, 'Server full');
         return;
@@ -1211,21 +1224,31 @@ wss.on('connection', async (ws, request) => {
     // since players don't expect instant readiness.
     const reqUrl = new URL(request.url, 'http://localhost');
     const token = reqUrl.searchParams.get('token');
+
+    // Route to the requested match. Unknown / missing mode falls back
+    // to devils so older clients that don't send ?mode= keep working
+    // unchanged during the rollout.
+    let mode = reqUrl.searchParams.get('mode');
+    if (mode !== 'angels' && mode !== 'devils') mode = 'devils';
+    const match = matches[mode];
+
     const authedUser = await verifyAuthToken(token);
 
     const sessionId = newSessionId(match);
     sessionByWs.set(ws, sessionId);
+    match.clients.add(ws);
     sideWallSeenByWs.set(ws, 0);
     const player = addPlayer(match, sessionId);
     if (authedUser) {
         player.userId = authedUser.id;
         player.displayName = authedUser.display_name;
     }
-    console.log(`[server] ${sessionId} joined as ${authedUser ? authedUser.display_name : 'anon'} (${match.players.size} total, round=${match.roundState})`);
+    console.log(`[server] ${sessionId} joined ${mode} as ${authedUser ? authedUser.display_name : 'anon'} (${match.players.size} total, round=${match.roundState})`);
 
     ws.send(JSON.stringify({
         type: 'welcome',
         sessionId,
+        mode,
         user: authedUser ? { id: authedUser.id, display_name: authedUser.display_name, mmr: authedUser.mmr } : null,
     }));
     ws.send(JSON.stringify(buildWorldInit(match.world)));
@@ -1278,10 +1301,11 @@ wss.on('connection', async (ws, request) => {
     ws.on('close', () => {
         sessionByWs.delete(ws);
         sideWallSeenByWs.delete(ws);
+        match.clients.delete(ws);
         removePlayer(match, sessionId);
-        console.log(`[server] ${sessionId} left (${match.players.size} total, round=${match.roundState})`);
+        console.log(`[server] ${sessionId} left ${match.mode} (${match.players.size} total, round=${match.roundState})`);
         if (match.roundState === ROUND_OVER && !anyPlayers(match)) {
-            console.log('[server] all players gone during ROUND_OVER — auto-resetting');
+            console.log(`[server] all ${match.mode} players gone during ROUND_OVER — auto-resetting`);
             resetMatch(match);
         }
     });
@@ -1296,50 +1320,53 @@ setInterval(() => {
     const now = Date.now();
     const deltaMs = now - lastTickTime;
     lastTickTime = now;
+    const deltaSeconds = deltaMs / 1000;
 
-    step(match, deltaMs / 1000);
+    for (const match of Object.values(matches)) {
+        step(match, deltaSeconds);
 
-    if (match.pendingWorldInitForAll) {
-        match.pendingWorldInitForAll = false;
-        const initMsg = JSON.stringify(buildWorldInit(match.world));
-        for (const ws of wss.clients) {
+        if (match.pendingWorldInitForAll) {
+            match.pendingWorldInitForAll = false;
+            const initMsg = JSON.stringify(buildWorldInit(match.world));
+            for (const ws of match.clients) {
+                if (ws.readyState !== 1) continue;
+                ws.send(initMsg);
+                sideWallSeenByWs.set(ws, match.world.sideWallSegments.length);
+            }
+            resetTickDeltas(match.world);
+        }
+
+        const snapBase = buildSnapshot(match);
+        const totalSegs = match.world.sideWallSegments.length;
+        for (const ws of match.clients) {
             if (ws.readyState !== 1) continue;
-            ws.send(initMsg);
-            sideWallSeenByWs.set(ws, match.world.sideWallSegments.length);
+            const sid = sessionByWs.get(ws);
+            const seen = sideWallSeenByWs.get(ws) || 0;
+
+            // Per-client additions: new side-wall segments + whether this client has
+            // clicked READY for the current round (lets the client dim its own button).
+            const perClientExtras = {
+                myReady: sid ? match.readyPlayers.has(sid) : false,
+            };
+
+            if (totalSegs > seen) {
+                perClientExtras.newSideWallSegments = match.world.sideWallSegments.slice(seen);
+                sideWallSeenByWs.set(ws, totalSegs);
+            }
+
+            const perClientSnap = Object.assign({}, snapBase, perClientExtras);
+            ws.send(JSON.stringify(perClientSnap));
         }
-        resetTickDeltas(match.world);
-    }
-
-    const snapBase = buildSnapshot(match);
-
-    const totalSegs = match.world.sideWallSegments.length;
-    for (const ws of wss.clients) {
-        if (ws.readyState !== 1) continue;
-        const sid = sessionByWs.get(ws);
-        const seen = sideWallSeenByWs.get(ws) || 0;
-
-        // Per-client additions: new side-wall segments + whether this client has
-        // clicked READY for the current round (lets the client dim its own button).
-        const perClientExtras = {
-            myReady: sid ? match.readyPlayers.has(sid) : false,
-        };
-
-        if (totalSegs > seen) {
-            perClientExtras.newSideWallSegments = match.world.sideWallSegments.slice(seen);
-            sideWallSeenByWs.set(ws, totalSegs);
-        }
-
-        const perClientSnap = Object.assign({}, snapBase, perClientExtras);
-        ws.send(JSON.stringify(perClientSnap));
     }
 
     logTimer += deltaMs;
     if (logTimer >= 1000) {
         logTimer = 0;
-        if (match.players.size > 0) {
+        for (const match of Object.values(matches)) {
+            if (match.players.size === 0) continue;
             const w = match.world;
             const lines = [
-                `t=${(match.elapsedMs / 1000).toFixed(1)}s round=${match.roundState} ` +
+                `[${match.mode}] t=${(match.elapsedMs / 1000).toFixed(1)}s round=${match.roundState} ` +
                 `spikeY=${match.spikeY.toFixed(0)} hazard=${match.hazardSpeed} ` +
                 `interval=${match.nextIntervalIndex} ready=${match.readyPlayers.size} ` +
                 `blocks=${w.blocks.size} coins=${w.coins.size} pent=${w.pentagons.size} ` +
