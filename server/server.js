@@ -333,7 +333,13 @@ function generateSideWallsUpTo(world, targetY) {
     while (world.lastWallChunkY > targetY) {
         const chunkBottom = world.lastWallChunkY;
         const chunkTop = chunkBottom - SIM.CANVAS_HEIGHT;
-        for (let y = chunkBottom; y > chunkTop; y -= wallThick) {
+        // Floor-align the first wall in this chunk to a global multiple
+        // of wallThick. This keeps walls on a continuous grid across
+        // chunk boundaries — otherwise the boundary y values are
+        // arbitrary (not multiples of wallThick) and the chunk seam
+        // ends up with two walls only ~30px apart instead of 35.
+        const firstY = Math.floor(chunkBottom / wallThick) * wallThick;
+        for (let y = firstY; y > chunkTop; y -= wallThick) {
             world.sideWallSegments.push({ y });
         }
         world.lastWallChunkY = chunkTop;
