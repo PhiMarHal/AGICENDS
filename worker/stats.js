@@ -82,11 +82,16 @@ export async function recordMatch(request, env) {
     // for this match. MMR failures don't fail the match record: the
     // match is already saved, and the worst case here is one round
     // missing rating updates.
+    //
+    // Angels is cooperative — no skill comparison is meaningful, so we
+    // skip the MMR pass entirely and return an empty changes object.
     let mmrChanges = {};
-    try {
-        mmrChanges = await updateMmrForMatch(env, players);
-    } catch (err) {
-        console.error('mmr update failed for match', matchId, err);
+    if (mode !== 'angels') {
+        try {
+            mmrChanges = await updateMmrForMatch(env, players);
+        } catch (err) {
+            console.error('mmr update failed for match', matchId, err);
+        }
     }
 
     return json({ ok: true, match_id: matchId, mmr_changes: mmrChanges });
@@ -281,20 +286,58 @@ export async function getLeaderboard(request, env) {
     let limit = Number.parseInt(url.searchParams.get('limit'), 10);
     if (!Number.isInteger(limit) || limit <= 0) limit = 100;
     limit = Math.min(limit, 200);
+    const mode = url.searchParams.get('mode') === 'angels' ? 'angels' : 'devils';
 
-    // Only active users who've actually played a match. Sort by MMR
-    // descending; tie-break by id (older accounts first) so order is
-    // stable across refreshes.
+    if (mode === 'angels') {
+        // Angels: each (player, match) is its own entry. Sorted by team
+        // score descending so the highest team runs float to the top.
+        // Then dense-ranked in JS so all teammates from one match share
+        // a rank, e.g. (1, 1, 1, 1, 2, 2, ...). Solo Angels runs count
+        // the same as team runs — one entry, one rank slot.
+        const rows = await all(env,
+            `SELECT u.id, u.display_name, mp.final_score AS score, mp.match_id
+             FROM match_players mp
+             JOIN matches m ON m.id = mp.match_id
+             JOIN users u ON u.id = mp.user_id
+             WHERE m.mode = 'angels' AND u.status = 'active'
+             ORDER BY mp.final_score DESC, mp.match_id DESC, u.id ASC
+             LIMIT ?`,
+            limit,
+        );
+
+        let rank = 0;
+        let prevScore = null;
+        for (const r of rows) {
+            if (r.score !== prevScore) {
+                rank++;
+                prevScore = r.score;
+            }
+            r.rank = rank;
+            delete r.match_id;   // not needed in the response
+        }
+        return json({ mode, players: rows });
+    }
+
+    // Devils: existing behavior — top users by MMR among accounts that
+    // have actually played at least one match. Each row gets a unique
+    // rank (no ties in dense form since MMR rarely collides exactly).
     const rows = await all(env,
         `SELECT u.id, u.display_name, u.mmr
          FROM users u
          WHERE u.status = 'active'
-           AND EXISTS (SELECT 1 FROM match_players mp WHERE mp.user_id = u.id)
+           AND EXISTS (SELECT 1 FROM match_players mp
+                       JOIN matches m ON m.id = mp.match_id
+                       WHERE mp.user_id = u.id AND m.mode = 'devils')
          ORDER BY u.mmr DESC, u.id ASC
          LIMIT ?`,
         limit,
     );
-    return json({ players: rows });
+    for (let i = 0; i < rows.length; i++) {
+        rows[i].rank = i + 1;
+        rows[i].score = rows[i].mmr;     // unify the response shape with Angels
+        delete rows[i].mmr;
+    }
+    return json({ mode, players: rows });
 }
 
 // ─── GET /stats/recent ─────────────────────────────────────────────────

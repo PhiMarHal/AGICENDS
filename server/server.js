@@ -1292,14 +1292,14 @@ async function recordMatchResults(match) {
         if (res.ok) {
             const data = await res.json();
             console.log(`[stats] match recorded (id=${data.match_id}, ${players.length} player(s))`);
-            // Broadcast MMR changes (if any) so clients can show "+X MMR"
-            // on their GAME OVER overlay and keep their menu MMR fresh.
-            // Scoped to the finishing match — the other mode's room
-            // shouldn't see this message.
-            if (data.mmr_changes && Object.keys(data.mmr_changes).length > 0) {
-                const msg = JSON.stringify({ type: 'mmr_update', changes: data.mmr_changes });
+            // Broadcast on every successful record so clients can refresh
+            // the leaderboard panel and (for authed players in Devils) see
+            // their MMR change. Empty changes are fine — applyMmrUpdate
+            // gracefully no-ops if the local user isn't represented.
+            if (data.mmr_changes !== undefined) {
+                const msg = JSON.stringify({ type: 'mmr_update', changes: data.mmr_changes || {} });
                 for (const client of match.clients) {
-                    if (client.readyState === 1) client.send(msg);  // 1 = OPEN
+                    if (client.readyState === 1) client.send(msg);
                 }
             }
         } else {
@@ -1344,6 +1344,18 @@ wss.on('connection', async (ws, request) => {
         player.userId = authedUser.id;
         player.displayName = authedUser.display_name;
     }
+
+    // Angels: mid-round joiners are absorbed into the team as
+    // already-dead participants. They sit at the back of the
+    // resurrection queue (latest deathTime) and get rezzed at the
+    // next interval crossing after all earlier deaths. They appear
+    // on the game-over scoreboard and get the team score recorded.
+    if (mode === 'angels' && match.roundState === ROUND_RUNNING) {
+        player.inRound = true;
+        player.alive = false;
+        player.deathTime = match.elapsedMs;
+    }
+
     console.log(`[server] ${sessionId} joined ${mode} as ${authedUser ? authedUser.display_name : 'anon'} (${match.players.size} total, round=${match.roundState})`);
 
     ws.send(JSON.stringify({

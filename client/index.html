@@ -391,6 +391,37 @@
             padding: 8px 0;
         }
 
+        #leaderboard-mode-toggle {
+            display: flex;
+            gap: 8px;
+            margin-top: 14px;
+            padding-top: 12px;
+            border-top: 1px solid #333;
+            justify-content: center;
+        }
+
+        .leaderboard-mode-btn {
+            background: transparent;
+            color: #888;
+            border: 1px solid #444;
+            padding: 6px 18px;
+            cursor: pointer;
+            font-family: monospace;
+            font-size: 13px;
+            letter-spacing: 1px;
+        }
+
+        .leaderboard-mode-btn:hover {
+            color: #fff;
+            border-color: #777;
+        }
+
+        .leaderboard-mode-btn.active {
+            color: #000;
+            background: #fff;
+            border-color: #fff;
+        }
+
         @media (min-width: 1200px) {
             #leaderboard-overlay {
                 inset: auto;
@@ -550,6 +581,10 @@
             <h2>Top 100</h2>
             <div id="leaderboard-rows">
                 <div class="leaderboard-empty">Loading…</div>
+            </div>
+            <div id="leaderboard-mode-toggle">
+                <button class="leaderboard-mode-btn" data-mode="devils">DEVILS</button>
+                <button class="leaderboard-mode-btn" data-mode="angels">ANGELS</button>
             </div>
         </div>
     </div>
@@ -931,6 +966,16 @@
         const leaderboardRows = document.getElementById('leaderboard-rows');
         const leaderboardClose = document.getElementById('leaderboard-close');
         const menuLeaderboardLink = document.getElementById('menu-leaderboard-link');
+        const leaderboardModeBtns = document.querySelectorAll('.leaderboard-mode-btn');
+        // Which mode is currently displayed in the leaderboard panel. Falls
+        // back to 'devils' until the user opens it (or picks a mode in-game).
+        let leaderboardMode = 'devils';
+
+        function updateLeaderboardModeButtons() {
+            leaderboardModeBtns.forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.mode === leaderboardMode);
+            });
+        }
 
         function renderLeaderboardEmpty(text) {
             const d = document.createElement('div');
@@ -943,31 +988,39 @@
                 renderLeaderboardEmpty('No players yet.');
                 return;
             }
-            const rows = players.map((p, i) => {
+            const rows = players.map(p => {
                 const row = document.createElement('div');
                 const isMe = currentUser && currentUser.id === p.id;
                 row.className = 'leaderboard-row' + (isMe ? ' me' : '');
-                const rank = document.createElement('span');
-                rank.className = 'leaderboard-rank';
-                rank.textContent = (i + 1) + '.';
+                const rankEl = document.createElement('span');
+                rankEl.className = 'leaderboard-rank';
+                // Server provides rank — dense for Angels (teammates share),
+                // sequential for Devils. We just display it.
+                rankEl.textContent = (p.rank != null ? p.rank : '?') + '.';
                 const name = document.createElement('span');
                 name.className = 'leaderboard-name';
                 name.textContent = p.display_name;
-                const mmr = document.createElement('span');
-                mmr.className = 'leaderboard-mmr';
-                mmr.textContent = p.mmr;
-                row.appendChild(rank);
+                const score = document.createElement('span');
+                score.className = 'leaderboard-mmr';
+                score.textContent = p.score;
+                row.appendChild(rankEl);
                 row.appendChild(name);
-                row.appendChild(mmr);
+                row.appendChild(score);
                 return row;
             });
             leaderboardRows.replaceChildren(...rows);
         }
         async function openLeaderboard() {
+            // First-open default: match the mode the player is currently in.
+            // Subsequent opens preserve whatever toggle the user last chose.
+            if (!leaderboardOverlay.classList.contains('open') && currentMode) {
+                leaderboardMode = currentMode;
+            }
+            updateLeaderboardModeButtons();
             leaderboardOverlay.classList.add('open');
             renderLeaderboardEmpty('Loading…');
             try {
-                const res = await fetch(AUTH_WORKER_URL + '/stats/leaderboard');
+                const res = await fetch(AUTH_WORKER_URL + '/stats/leaderboard?mode=' + leaderboardMode);
                 const data = await res.json();
                 renderLeaderboard(data.players || []);
             } catch (err) {
@@ -979,6 +1032,19 @@
         }
         menuLeaderboardLink.addEventListener('click', openLeaderboard);
         leaderboardClose.addEventListener('click', closeLeaderboard);
+        leaderboardModeBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (btn.dataset.mode === leaderboardMode) return;   // no-op
+                leaderboardMode = btn.dataset.mode;
+                updateLeaderboardModeButtons();
+                // Refetch with the new mode. Keep the overlay open.
+                renderLeaderboardEmpty('Loading…');
+                fetch(AUTH_WORKER_URL + '/stats/leaderboard?mode=' + leaderboardMode)
+                    .then(r => r.json())
+                    .then(d => renderLeaderboard(d.players || []))
+                    .catch(() => renderLeaderboardEmpty('Failed to load.'));
+            });
+        });
         // Mobile only: click on backdrop closes (web has no clickable backdrop).
         leaderboardOverlay.addEventListener('click', (e) => {
             if (e.target === leaderboardOverlay) closeLeaderboard();
@@ -1269,7 +1335,7 @@
 
                 this.spikeContainer = this.add.container(0, CANVAS_HEIGHT + 50);
                 this.spikeContainer.setDepth(5);
-                const spikeBgHeight = 50000;
+                const spikeBgHeight = 4000000;
                 const spikeBg = this.add.rectangle(0, 64, CANVAS_WIDTH, spikeBgHeight, 0x000000);
                 spikeBg.setOrigin(0, 0);
                 this.spikeContainer.add(spikeBg);
