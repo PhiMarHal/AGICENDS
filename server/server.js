@@ -1009,23 +1009,24 @@ function step(match, deltaSeconds) {
         // rezzes one player, in death-order. That feels right: the chain
         // gets longer, the rewards stack.
         if (match.mode === 'angels') {
-            let resurrector = null;
             let deadEarliest = null;
             for (const q of match.players.values()) {
                 if (!q.inRound) continue;
-                if (q.alive) {
-                    // Resurrector = the highest player (lowest y).
-                    if (!resurrector || q.y < resurrector.y) resurrector = q;
-                } else if (q.deathTime != null && !q.disconnected) {
-                    // Skip ghosts — they're gone, no point bringing back a
-                    // disconnected client into the team.
-                    if (!deadEarliest || q.deathTime < deadEarliest.deathTime) deadEarliest = q;
-                }
+                if (q.alive) continue;
+                if (q.deathTime == null || q.disconnected) continue;
+                if (!deadEarliest || q.deathTime < deadEarliest.deathTime) deadEarliest = q;
             }
-            if (resurrector && deadEarliest) {
+            if (deadEarliest) {
+                // Fixed spawn: centered horizontally, 40 px above the
+                // interval that was just crossed. Gives the revived player
+                // a clean fresh-spawn feeling rather than dropping them
+                // wherever the current leader happens to be.
+                const justCrossedAltitude = match.world.intervalAltitudes[intervalNumber - 1];
+                const refStartY = SIM.CANVAS_HEIGHT - SIM.START_Y_OFFSET;
+                const intervalY = refStartY - justCrossedAltitude;
                 deadEarliest.alive = true;
-                deadEarliest.x = resurrector.x;
-                deadEarliest.y = resurrector.y;
+                deadEarliest.x = SIM.CANVAS_WIDTH / 2;
+                deadEarliest.y = intervalY - 40;
                 deadEarliest.vx = 0;
                 deadEarliest.vy = 0;
                 deadEarliest.deathTime = null;
@@ -1033,7 +1034,6 @@ function step(match, deltaSeconds) {
                 match.eventsThisTick.push({
                     type: 'resurrected',
                     playerId: deadEarliest.id,
-                    by: resurrector.id,
                 });
             }
         }
@@ -1072,8 +1072,25 @@ function buildSnapshot(match) {
     // participating). Spectators stay at spawn position with alive=false.
     const players = {};
     const angelsTeamScore = match.mode === 'angels' ? match.teamScore : null;
+
+    // Build the resurrection queue ordering for dead in-round Angels
+    // players so each gets a queuePosition (1 = next to be revived).
+    // Disconnected ghosts are excluded — they don't get revived.
+    const queueByPlayer = new Map();
+    if (match.mode === 'angels') {
+        const dead = [];
+        for (const p of match.players.values()) {
+            if (!p.inRound || p.alive || p.disconnected || p.deathTime == null) continue;
+            dead.push(p);
+        }
+        dead.sort((a, b) => a.deathTime - b.deathTime);
+        for (let i = 0; i < dead.length; i++) {
+            queueByPlayer.set(dead[i].id, i + 1);
+        }
+    }
+
     for (const p of match.players.values()) {
-        players[p.id] = {
+        const entry = {
             displayName: p.displayName,   // null for anon; client falls back to p.id
             x: p.x, y: p.y, vx: p.vx, vy: p.vy,
             alive: p.alive, facingRight: p.facingRight,
@@ -1082,6 +1099,9 @@ function buildSnapshot(match) {
             inRound: p.inRound,
             pendingInRound: !p.inRound && match.readyPlayers.has(p.id),
         };
+        const qp = queueByPlayer.get(p.id);
+        if (qp != null) entry.queuePosition = qp;
+        players[p.id] = entry;
     }
 
     const pentagonStates = {};

@@ -2096,30 +2096,72 @@
                 this.spectatingLeftArrow.on('pointerdown', () => this.cycleSpectatedPlayer(-1));
                 this.spectatingRightArrow.on('pointerdown', () => this.cycleSpectatedPlayer(1));
 
-                // Angels only: offer a JOIN button so spectators can opt
-                // into the team as a dead participant waiting for rez.
-                // The server's ready-handler ROUND_RUNNING case picks
-                // this up and places them at the back of the queue.
+                // Angels-only controls. The JOIN button is offered to true
+                // spectators (joined the match but not yet inRound). The
+                // queue text replaces it once the player is in the rez
+                // queue — either by clicking JOIN, or by having died
+                // in-round. Visibility is driven each snapshot by
+                // updateSpectatingAngelsControls(); both elements start
+                // hidden here.
                 if (currentMode === 'angels') {
                     this.spectatingJoinButton = this.add.rectangle(
                         CANVAS_WIDTH / 2, CANVAS_HEIGHT - 160, 280, 70, 0xffffff
-                    ).setScrollFactor(0).setDepth(100).setInteractive({ useHandCursor: true });
+                    ).setScrollFactor(0).setDepth(100)
+                        .setInteractive({ useHandCursor: true })
+                        .setVisible(false);
 
                     this.spectatingJoinButtonText = this.add.text(
                         CANVAS_WIDTH / 2, CANVAS_HEIGHT - 160, 'JOIN',
                         { fontFamily: 'Arial', fontSize: '32px', fontStyle: 'bold', color: '#000000' }
-                    ).setOrigin(0.5).setScrollFactor(0).setDepth(101);
+                    ).setOrigin(0.5).setScrollFactor(0).setDepth(101).setVisible(false);
 
+                    this.spectatingQueueText = this.add.text(
+                        CANVAS_WIDTH / 2, CANVAS_HEIGHT - 160, '',
+                        {
+                            fontFamily: 'Arial', fontSize: '28px', fontStyle: 'bold',
+                            color: '#ffffff', stroke: '#000000', strokeThickness: 4,
+                        }
+                    ).setOrigin(0.5).setScrollFactor(0).setDepth(101).setVisible(false);
+
+                    this.joinTapped = false;
                     this.spectatingJoinButton.on('pointerdown', () => {
                         sendReady();
-                        // Visual feedback: dim and relabel. The button
-                        // stays on screen with this disabled look until
-                        // either rez (hideSpectatingUI takes care of it)
-                        // or the round ends.
-                        this.spectatingJoinButtonText.setText('WAITING...');
-                        this.spectatingJoinButton.fillColor = 0xcccccc;
-                        this.spectatingJoinButton.disableInteractive();
+                        // Hide the button immediately — sitting on
+                        // "WAITING..." for several seconds looked like a
+                        // bug. Show optimistic queue text in its place;
+                        // the real position arrives on the next snapshot.
+                        this.joinTapped = true;
+                        this.spectatingJoinButton.setVisible(false);
+                        this.spectatingJoinButtonText.setVisible(false);
+                        this.spectatingQueueText.setText('Joining team…');
+                        this.spectatingQueueText.setVisible(true);
                     });
+                }
+            }
+
+            updateSpectatingAngelsControls(mySnapData) {
+                if (!this.spectatingJoinButton) return;   // not in Angels spectator UI
+                if (!mySnapData) return;
+                const inRound = mySnapData.inRound === true;
+                if (inRound) {
+                    // Player is in the rez queue (dead in-round). Hide
+                    // JOIN, show queue text with their position.
+                    this.spectatingJoinButton.setVisible(false);
+                    this.spectatingJoinButtonText.setVisible(false);
+                    const q = mySnapData.queuePosition;
+                    const msg = q != null
+                        ? q + ' interval' + (q === 1 ? '' : 's') + ' until revive'
+                        : 'Waiting for revive…';
+                    this.spectatingQueueText.setText(msg);
+                    this.spectatingQueueText.setVisible(true);
+                } else {
+                    // True spectator. Show JOIN — unless already tapped,
+                    // in which case the optimistic queue text is up.
+                    this.spectatingQueueText.setVisible(this.joinTapped === true);
+                    if (!this.joinTapped) {
+                        this.spectatingJoinButton.setVisible(true);
+                        this.spectatingJoinButtonText.setVisible(true);
+                    }
                 }
             }
 
@@ -2139,6 +2181,8 @@
                 if (this.spectatingRightArrow) { this.spectatingRightArrow.destroy(); this.spectatingRightArrow = null; }
                 if (this.spectatingJoinButton) { this.spectatingJoinButton.destroy(); this.spectatingJoinButton = null; }
                 if (this.spectatingJoinButtonText) { this.spectatingJoinButtonText.destroy(); this.spectatingJoinButtonText = null; }
+                if (this.spectatingQueueText) { this.spectatingQueueText.destroy(); this.spectatingQueueText = null; }
+                this.joinTapped = false;
             }
 
             updateScoreboard(players) {
@@ -2292,6 +2336,11 @@
                     const showArrows = this.aliveInRoundPlayers.length > 1;
                     if (this.spectatingLeftArrow) this.spectatingLeftArrow.setVisible(showArrows);
                     if (this.spectatingRightArrow) this.spectatingRightArrow.setVisible(showArrows);
+
+                    // Angels: drive the JOIN button / rez-queue text from
+                    // mySnapData. Becomes a queue position as soon as the
+                    // player is in the round.
+                    this.updateSpectatingAngelsControls(mySnapData);
                 }
 
                 if (snap.newSideWallSegments) for (const seg of snap.newSideWallSegments) this.spawnSideWallSegment(seg);
@@ -2529,7 +2578,26 @@
                                     this.myState.alive = true;
                                     this.myState.lastFlapTime = -Infinity;
                                 }
+                                // Snap the sprite (and eyes + name) to the
+                                // new position BEFORE attaching the camera.
+                                // Otherwise startFollow briefly latches
+                                // onto the sprite at its previous default
+                                // spawn position, causing a one-frame
+                                // whiplash through the bottom of the
+                                // canvas before update() moves it.
+                                v.sprite.x = p.x;
+                                v.sprite.y = p.y;
+                                v.eyesContainer.x = p.x;
+                                v.eyesContainer.y = p.y;
+                                if (v.nameText) {
+                                    v.nameText.x = p.x;
+                                    v.nameText.y = p.y - 60;
+                                }
                                 this.cameras.main.startFollow(v.sprite, true, 0.1, 0.1);
+                                // Also center the camera immediately on the
+                                // spawn point, skipping the lerp from
+                                // wherever the spectator camera was.
+                                this.cameras.main.centerOn(p.x, p.y);
                                 // Snap interp buffer so the sprite teleports to
                                 // the new spawn point cleanly instead of
                                 // gliding across screen from the dead position.
