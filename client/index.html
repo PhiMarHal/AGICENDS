@@ -2095,6 +2095,32 @@
 
                 this.spectatingLeftArrow.on('pointerdown', () => this.cycleSpectatedPlayer(-1));
                 this.spectatingRightArrow.on('pointerdown', () => this.cycleSpectatedPlayer(1));
+
+                // Angels only: offer a JOIN button so spectators can opt
+                // into the team as a dead participant waiting for rez.
+                // The server's ready-handler ROUND_RUNNING case picks
+                // this up and places them at the back of the queue.
+                if (currentMode === 'angels') {
+                    this.spectatingJoinButton = this.add.rectangle(
+                        CANVAS_WIDTH / 2, CANVAS_HEIGHT - 160, 280, 70, 0xffffff
+                    ).setScrollFactor(0).setDepth(100).setInteractive({ useHandCursor: true });
+
+                    this.spectatingJoinButtonText = this.add.text(
+                        CANVAS_WIDTH / 2, CANVAS_HEIGHT - 160, 'JOIN',
+                        { fontFamily: 'Arial', fontSize: '32px', fontStyle: 'bold', color: '#000000' }
+                    ).setOrigin(0.5).setScrollFactor(0).setDepth(101);
+
+                    this.spectatingJoinButton.on('pointerdown', () => {
+                        sendReady();
+                        // Visual feedback: dim and relabel. The button
+                        // stays on screen with this disabled look until
+                        // either rez (hideSpectatingUI takes care of it)
+                        // or the round ends.
+                        this.spectatingJoinButtonText.setText('WAITING...');
+                        this.spectatingJoinButton.fillColor = 0xcccccc;
+                        this.spectatingJoinButton.disableInteractive();
+                    });
+                }
             }
 
             cycleSpectatedPlayer(dir) {
@@ -2111,6 +2137,8 @@
                 if (this.spectatingText) { this.spectatingText.destroy(); this.spectatingText = null; }
                 if (this.spectatingLeftArrow) { this.spectatingLeftArrow.destroy(); this.spectatingLeftArrow = null; }
                 if (this.spectatingRightArrow) { this.spectatingRightArrow.destroy(); this.spectatingRightArrow = null; }
+                if (this.spectatingJoinButton) { this.spectatingJoinButton.destroy(); this.spectatingJoinButton = null; }
+                if (this.spectatingJoinButtonText) { this.spectatingJoinButtonText.destroy(); this.spectatingJoinButtonText = null; }
             }
 
             updateScoreboard(players) {

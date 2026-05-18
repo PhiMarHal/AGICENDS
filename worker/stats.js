@@ -289,18 +289,18 @@ export async function getLeaderboard(request, env) {
     const mode = url.searchParams.get('mode') === 'angels' ? 'angels' : 'devils';
 
     if (mode === 'angels') {
-        // Angels: each (player, match) is its own entry. Sorted by team
-        // score descending so the highest team runs float to the top.
-        // Then dense-ranked in JS so all teammates from one match share
-        // a rank, e.g. (1, 1, 1, 1, 2, 2, ...). Solo Angels runs count
-        // the same as team runs — one entry, one rank slot.
+        // Angels: one row per player, showing their best team score from
+        // any Angels match they've participated in. Dense-ranked, so two
+        // players whose personal bests happen to match (e.g. they were on
+        // the same record-setting team) share a rank.
         const rows = await all(env,
-            `SELECT u.id, u.display_name, mp.final_score AS score, mp.match_id
+            `SELECT u.id, u.display_name, MAX(mp.final_score) AS score
              FROM match_players mp
              JOIN matches m ON m.id = mp.match_id
              JOIN users u ON u.id = mp.user_id
              WHERE m.mode = 'angels' AND u.status = 'active'
-             ORDER BY mp.final_score DESC, mp.match_id DESC, u.id ASC
+             GROUP BY u.id, u.display_name
+             ORDER BY score DESC, u.id ASC
              LIMIT ?`,
             limit,
         );
@@ -313,7 +313,6 @@ export async function getLeaderboard(request, env) {
                 prevScore = r.score;
             }
             r.rank = rank;
-            delete r.match_id;   // not needed in the response
         }
         return json({ mode, players: rows });
     }

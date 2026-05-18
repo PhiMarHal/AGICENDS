@@ -1345,17 +1345,6 @@ wss.on('connection', async (ws, request) => {
         player.displayName = authedUser.display_name;
     }
 
-    // Angels: mid-round joiners are absorbed into the team as
-    // already-dead participants. They sit at the back of the
-    // resurrection queue (latest deathTime) and get rezzed at the
-    // next interval crossing after all earlier deaths. They appear
-    // on the game-over scoreboard and get the team score recorded.
-    if (mode === 'angels' && match.roundState === ROUND_RUNNING) {
-        player.inRound = true;
-        player.alive = false;
-        player.deathTime = match.elapsedMs;
-    }
-
     console.log(`[server] ${sessionId} joined ${mode} as ${authedUser ? authedUser.display_name : 'anon'} (${match.players.size} total, round=${match.roundState})`);
 
     ws.send(JSON.stringify({
@@ -1407,6 +1396,22 @@ wss.on('connection', async (ws, request) => {
                 }
                 resetMatch(match);
                 beginCountdown(match, sessionId);
+
+            } else if (match.roundState === ROUND_RUNNING && match.mode === 'angels') {
+                // Mid-round join in Angels: absorb the player into the team
+                // as a dead participant. They sit at the back of the
+                // resurrection queue (latest deathTime) and get rezzed at
+                // the next interval crossing after all earlier deaths.
+                // They appear on the game-over scoreboard and get the team
+                // score recorded. Devils mode silently ignores ready during
+                // RUNNING (no fallthrough).
+                const p = match.players.get(sessionId);
+                if (p && !p.inRound) {
+                    p.inRound = true;
+                    p.alive = false;
+                    p.deathTime = match.elapsedMs;
+                    console.log(`[server] ${sessionId} joined angels mid-round as dead participant`);
+                }
             }
         }
     });
