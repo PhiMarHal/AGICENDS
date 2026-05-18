@@ -1026,7 +1026,7 @@ function step(match, deltaSeconds) {
                 const intervalY = refStartY - justCrossedAltitude;
                 deadEarliest.alive = true;
                 deadEarliest.x = SIM.CANVAS_WIDTH / 2;
-                deadEarliest.y = intervalY - 40;
+                deadEarliest.y = intervalY - 80;
                 deadEarliest.vx = 0;
                 deadEarliest.vy = 0;
                 deadEarliest.deathTime = null;
