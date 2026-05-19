@@ -206,15 +206,17 @@ router.post('/auth/logout', auth.handleLogout);
 router.post('/auth/bespoke/signup', auth.signupBespoke);
 router.post('/auth/bespoke/signin', auth.signinBespoke);
 
-// OAuth flows — `start` opens the redirect, `callback` finishes the dance.
-router.get('/auth/twitter/start', auth.twitterStart);
-router.get('/auth/twitter/callback', auth.twitterCallback);
-router.get('/auth/google/start', auth.googleStart);
-router.get('/auth/google/callback', auth.googleCallback);
-
-// Farcaster uses Sign-In-With-Farcaster: client signs a message, posts the
-// proof here, we verify it. Not a redirect flow.
-router.post('/auth/farcaster/verify', auth.farcasterVerify);
+// Sign In With Ethereum (EIP-4361).
+//   nonce   → server gives the client a random nonce to embed in the
+//             EIP-4361 message it asks the wallet to sign.
+//   verify  → client posts back { message, signature, address }; on
+//             success either logs an existing user in OR returns a
+//             claim_ticket the client uses to finish account creation.
+//   claim   → consumes a claim_ticket + chosen username (+ optional
+//             password) and creates the account.
+router.get('/auth/wallet/nonce', auth.walletNonce);
+router.post('/auth/wallet/verify', auth.walletVerify);
+router.post('/auth/wallet/claim', auth.walletClaim);
 
 // Stats — server-to-server write, public reads.
 router.post('/stats/record', stats.recordMatch);

@@ -1,18 +1,17 @@
 // AGISCENDS authentication — everything auth-related in one file.
 //
 // Sections (Ctrl+F the §SECTION markers):
-//   §JWT        — HS256 sign/verify, no external dependency
-//   §SESSIONS   — issueSession, handleVerify, handleLogout
-//   §BESPOKE    — signupBespoke, signinBespoke (stub)
-//   §TWITTER    — twitterStart, twitterCallback (stub)
-//   §GOOGLE     — googleStart, googleCallback (stub)
-//   §FARCASTER  — farcasterVerify (stub)
+//   §JWT                — HS256 sign/verify, no external dependency
+//   §SESSIONS           — issueSession, handleVerify, handleLogout
+//   §BESPOKE            — signupBespoke, signinBespoke
+//   §IDENTITY-HELPERS   — shared user-lookup helpers across providers
+//   §ETHEREUM           — Sign In With Ethereum (EIP-4361 / SIWE)
 //
-// All provider handlers share two contracts:
-//   1. On success, they call `issueSession(env, user)` to mint a JWT.
-//   2. The result is returned either as JSON (bespoke, farcaster) or as
-//      a redirect back to the game with the token in the URL fragment
-//      (twitter, google) — to be implemented per provider.
+// All provider handlers funnel through `issueSession(env, user)` to mint a
+// JWT, so the session shape is consistent regardless of how the user
+// authenticated. Each users row can have multiple auth_identities rows
+// pointing at it — a single account can be reached via bespoke
+// username/password AND via Ethereum signature, attached over time.
 
 import { json, safeJson, one, run } from './index.js';
 
@@ -369,94 +368,365 @@ function constantTimeBytesEqual(a, b) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// §TWITTER — OAuth 2.0 with PKCE
+// §IDENTITY-HELPERS — shared user lookup across providers
 // ═══════════════════════════════════════════════════════════════════════
 //
-//   GET /auth/twitter/start
-//     Generates a state + PKCE verifier, stashes them in KV (10 min TTL),
-//     redirects the browser to Twitter's authorize URL.
-//
-//   GET /auth/twitter/callback?code=...&state=...
-//     Twitter sends the browser here after approval. We exchange the
-//     code for an access token, fetch the user's profile, find or create
-//     a matching user row (provider='twitter', external_id=Twitter user
-//     id), issue a session, and redirect the browser back to the game.
-//
-// Required env (set later):
-//   env.TWITTER_CLIENT_ID
-//   env.TWITTER_CLIENT_SECRET
-// And in wrangler.toml:
-//   TWITTER_CALLBACK_URL = "https://<worker-public-url>/auth/twitter/callback"
-//   (must match exactly what's registered on the Twitter Developer portal)
+// An `account` is one row in `users`. The `auth_identities` table holds
+// zero-or-more login methods linked to that account. Bespoke username/
+// password is `provider='bespoke'`, credential = PBKDF2 hash. Ethereum
+// wallet is `provider='ethereum'`, external_id = lowercased address,
+// credential = NULL. A user can have both — sign in either way.
 
-export async function twitterStart(_request, _env) {
-    // TODO: generate state + PKCE verifier, store in KV, redirect to
-    //       https://twitter.com/i/oauth2/authorize?...
-    return json({ error: 'not_implemented' }, 501);
+// Strip everything not legal in a display_name and trim to the 16-char
+// cap. Used to defensively validate user-supplied usernames before
+// touching the DB. We don't ever derive a default from provider-supplied
+// data (real name, email, ENS handle, etc.) — those are personally
+// identifying. Users always pick their own display_name in our flow.
+function sanitizeForDisplayName(raw) {
+    if (typeof raw !== 'string') return '';
+    return raw.replace(/[^A-Za-z0-9_]/g, '').slice(0, 16);
 }
 
-export async function twitterCallback(_request, _env) {
-    // TODO: validate state, exchange code for token, fetch profile,
-    //       upsert auth_identity, issue session, redirect to game.
-    return json({ error: 'not_implemented' }, 501);
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// §GOOGLE — OAuth 2.0
-// ═══════════════════════════════════════════════════════════════════════
-//
-//   GET /auth/google/start
-//     Generates a state nonce, stashes in KV (10 min TTL), redirects to
-//     Google's authorize URL.
-//
-//   GET /auth/google/callback?code=...&state=...
-//     Google sends the browser here after consent. We exchange the code
-//     for an id_token, verify it, pull out `sub` (Google's stable user
-//     id), find or create a matching user row (provider='google',
-//     external_id=sub), issue a session.
-//
-// Required env (set later):
-//   env.GOOGLE_CLIENT_ID
-//   env.GOOGLE_CLIENT_SECRET
-// And in wrangler.toml:
-//   GOOGLE_CALLBACK_URL = "https://<worker-public-url>/auth/google/callback"
-//   (must match what's registered in Google Cloud Console → Credentials)
-
-export async function googleStart(_request, _env) {
-    // TODO: generate state, store in KV, redirect to
-    //       https://accounts.google.com/o/oauth2/v2/auth?...
-    return json({ error: 'not_implemented' }, 501);
-}
-
-export async function googleCallback(_request, _env) {
-    // TODO: validate state, exchange code for tokens, verify id_token,
-    //       upsert auth_identity, issue session, redirect to game.
-    return json({ error: 'not_implemented' }, 501);
+// Look up a user by their (provider, external_id) pair. Returns the
+// same shape /auth/verify uses, or null if no such identity is linked.
+// Caller decides what to do with null: for the wallet flow it means
+// kicking off the username-claim step.
+async function findIdentityUser(env, provider, externalId) {
+    return await one(env,
+        `SELECT u.id, u.display_name, u.status, u.mmr
+         FROM auth_identities ai
+         JOIN users u ON u.id = ai.user_id
+         WHERE ai.provider = ? AND ai.external_id = ?`,
+        provider, externalId,
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// §FARCASTER — Sign In With Farcaster (SIWF)
+// §ETHEREUM — Sign In With Ethereum (EIP-4361 / SIWE)
 // ═══════════════════════════════════════════════════════════════════════
 //
-// Unlike Twitter/Google, SIWF is NOT a redirect flow. The browser shows
-// a QR code (or button on mobile), the user signs a message in the
-// Warpcast app with their Farcaster signer key, the proof is sent here,
-// and we verify it against the Farcaster on-chain registry.
+// The client proves ownership of an Ethereum address by signing a
+// structured message containing a server-issued nonce. We never see a
+// private key, never make an RPC call to a node — pure signature math
+// with @noble/curves (secp256k1) + @noble/hashes (keccak256).
 //
-//   POST /auth/farcaster/verify
-//     body: { message, signature, fid, nonce, domain }
-//     We:
-//       1. Re-derive the SIWE-style message and check the signature
-//       2. Query the Farcaster ID Registry contract to confirm the FID
-//          belongs to the signing key
-//       3. Find or create a matching user row (provider='farcaster',
-//          external_id=fid), issue a session.
+// Flow:
 //
-// Honestly more involved than Twitter/Google — signature recovery + an
-// Optimism RPC call. We'll do this one last.
+//   1. GET  /auth/wallet/nonce
+//        → { nonce, statement }
+//        Server generates a 32-hex-char random nonce, stashes it in KV
+//        with a 10-minute TTL. The client builds the SIWE message
+//        locally using this nonce (it's the binding between this
+//        signature and our backend).
+//
+//   2. Client asks the wallet to personal_sign the EIP-4361 message.
+//
+//   3. POST /auth/wallet/verify { message, signature, address }
+//        Server: re-parses the message, validates the nonce against
+//        KV (single-use, deleted on read), recovers the signing address
+//        from the signature, confirms it matches the claimed address.
+//        Then:
+//          - If (provider='ethereum', external_id=address) is already
+//            linked to a user → issue session, return { token, user }
+//          - Else → mint a claim ticket (random 32 hex chars, 10-min
+//            TTL in KV holding the verified address), return
+//            { claim_ticket }
+//
+//   4. POST /auth/wallet/claim { ticket, username, password? }
+//        Server: validates ticket, validates username & uniqueness,
+//        creates the users row, creates the ethereum auth_identity. If
+//        a password was supplied, ALSO creates a bespoke auth_identity
+//        — that lets the user sign in either way going forward.
+//        Returns { token, user }.
+//
+// What the client signs (EIP-4361 §4):
+//
+//   ${domain} wants you to sign in with your Ethereum account:
+//   ${address}
+//
+//   ${statement}
+//
+//   URI: ${uri}
+//   Version: 1
+//   Chain ID: ${chainId}
+//   Nonce: ${nonce}
+//   Issued At: ${iso8601}
+//
+// We don't validate domain/uri/chainId on the server — the nonce
+// binding plus signature recovery is sufficient to prove ownership of
+// the address and freshness of the request. (We could add domain
+// checks for defense in depth later; not necessary for v1.)
 
-export async function farcasterVerify(_request, _env) {
-    // TODO: verify signature, check FID ownership on Optimism, upsert
-    //       auth_identity, issue session.
-    return json({ error: 'not_implemented' }, 501);
+import { secp256k1 } from '@noble/curves/secp256k1';
+import { keccak_256 } from '@noble/hashes/sha3';
+
+const SIWE_NONCE_TTL_SEC = 600;   // 10 min
+const SIWE_CLAIM_TTL_SEC = 600;   // 10 min
+const SIWE_STATEMENT = 'Sign in to AGISCENDS.';
+
+// Random 16-byte hex token. Used for both nonces and claim tickets —
+// same security properties (single-use, server-only, short TTL).
+function randomToken() {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// EIP-191 "personal_sign" message hash. The wallet prepends this magic
+// prefix before hashing — we replicate the same prefix server-side so
+// our signature verification matches what the wallet actually signed.
+function eip191Hash(message) {
+    const msgBytes = new TextEncoder().encode(message);
+    const prefix = '\x19Ethereum Signed Message:\n' + msgBytes.length;
+    const prefixBytes = new TextEncoder().encode(prefix);
+    const combined = new Uint8Array(prefixBytes.length + msgBytes.length);
+    combined.set(prefixBytes, 0);
+    combined.set(msgBytes, prefixBytes.length);
+    return keccak_256(combined);
+}
+
+// Recover the Ethereum address that produced the signature over the
+// given hash. Throws on malformed signature.
+//
+// Signature layout: 0x<r:32 bytes><s:32 bytes><v:1 byte>
+//   v is 27 or 28 in classic Ethereum (or 0/1 in newer wallets); we
+//   handle both. The recovery bit (0 or 1) tells secp256k1 which of
+//   the two possible public keys produced this signature.
+function recoverAddress(messageHash, signatureHex) {
+    let hex = signatureHex.startsWith('0x') ? signatureHex.slice(2) : signatureHex;
+    if (hex.length !== 130) throw new Error('signature_wrong_length');
+
+    const r = hex.slice(0, 64);
+    const s = hex.slice(64, 128);
+    const v = parseInt(hex.slice(128, 130), 16);
+
+    let recovery;
+    if (v === 0 || v === 1) recovery = v;
+    else if (v === 27 || v === 28) recovery = v - 27;
+    else throw new Error('invalid_v');
+
+    const sig = secp256k1.Signature.fromCompact(r + s).addRecoveryBit(recovery);
+    // recoverPublicKey returns a Point; toRawBytes(false) gives the
+    // 65-byte uncompressed form: 0x04 || X || Y. The Ethereum address
+    // is the last 20 bytes of keccak256(X || Y).
+    const pubKeyPoint = sig.recoverPublicKey(messageHash);
+    const uncompressed = pubKeyPoint.toRawBytes(false);
+    const addressBytes = keccak_256(uncompressed.slice(1)).slice(-20);
+    return '0x' + Array.from(addressBytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Pull the fields we care about out of the EIP-4361 message. We
+// validate format loosely — we need the address and nonce; everything
+// else is between the wallet UI and the user.
+function parseSiweMessage(message) {
+    if (typeof message !== 'string') return { addr: null, nonce: null };
+    const lines = message.split('\n');
+    // Line 0: "${domain} wants you to sign in with your Ethereum account:"
+    // Line 1: address
+    let addr = null;
+    if (lines.length > 1) {
+        const candidate = lines[1].trim();
+        if (/^0x[a-fA-F0-9]{40}$/.test(candidate)) addr = candidate.toLowerCase();
+    }
+    let nonce = null;
+    for (const line of lines) {
+        if (line.startsWith('Nonce: ')) {
+            nonce = line.slice('Nonce: '.length).trim();
+            break;
+        }
+    }
+    return { addr, nonce };
+}
+
+// GET /auth/wallet/nonce
+//   → { nonce, statement }
+// The client builds its SIWE message using `nonce`. `statement` is the
+// human-readable line the wallet displays to the user before they sign.
+export async function walletNonce(_request, env) {
+    const nonce = randomToken();
+    await env.AUTH_KV.put(
+        'siwe_nonce:' + nonce,
+        '1',                                            // value irrelevant
+        { expirationTtl: SIWE_NONCE_TTL_SEC },
+    );
+    return json({ nonce, statement: SIWE_STATEMENT });
+}
+
+// POST /auth/wallet/verify
+//   body: { message, signature, address }
+//   → 200 { token, user }                  (existing identity → logged in)
+//   → 200 { claim_ticket: "..." }          (new identity → pick username)
+//   → 4xx { error }
+export async function walletVerify(request, env) {
+    const body = await safeJson(request);
+    if (!body
+        || typeof body.message !== 'string'
+        || typeof body.signature !== 'string'
+        || typeof body.address !== 'string') {
+        return json({ error: 'invalid_request' }, 400);
+    }
+
+    const claimedAddress = body.address.toLowerCase();
+    if (!/^0x[a-f0-9]{40}$/.test(claimedAddress)) {
+        return json({ error: 'invalid_address' }, 400);
+    }
+
+    const { addr: msgAddr, nonce } = parseSiweMessage(body.message);
+    if (!msgAddr || !nonce) {
+        return json({ error: 'malformed_message' }, 400);
+    }
+    if (msgAddr !== claimedAddress) {
+        return json({ error: 'address_mismatch' }, 400);
+    }
+
+    // Single-use nonce check. Delete unconditionally on first read so a
+    // captured signature can't be re-submitted.
+    const nonceKey = 'siwe_nonce:' + nonce;
+    const stored = await env.AUTH_KV.get(nonceKey);
+    if (!stored) {
+        return json({ error: 'nonce_invalid_or_expired' }, 400);
+    }
+    await env.AUTH_KV.delete(nonceKey);
+
+    // Verify the signature actually came from `claimedAddress`.
+    let recovered;
+    try {
+        const hash = eip191Hash(body.message);
+        recovered = recoverAddress(hash, body.signature);
+    } catch (err) {
+        console.error('SIWE signature recovery failed:', err);
+        return json({ error: 'invalid_signature' }, 400);
+    }
+    if (recovered.toLowerCase() !== claimedAddress) {
+        return json({ error: 'signature_mismatch' }, 400);
+    }
+
+    // Existing identity? Log in.
+    const existing = await findIdentityUser(env, 'ethereum', claimedAddress);
+    if (existing) {
+        if (existing.status !== 'active') {
+            return json({ error: 'account_disabled' }, 401);
+        }
+        const token = await issueSession(env, existing);
+        return json({ token, user: existing });
+    }
+
+    // New identity. Mint a claim ticket holding the verified address;
+    // the client uses it to call /auth/wallet/claim with a username.
+    const ticket = randomToken();
+    await env.AUTH_KV.put(
+        'siwe_claim:' + ticket,
+        JSON.stringify({ address: claimedAddress, created_at: Date.now() }),
+        { expirationTtl: SIWE_CLAIM_TTL_SEC },
+    );
+    return json({ claim_ticket: ticket });
+}
+
+// POST /auth/wallet/claim
+//   body: { ticket, username, password? }
+//   → 200 { token, user }
+//   → 4xx { error }
+//
+// Consumes the claim ticket and creates the account. If `password` is
+// supplied, also links a bespoke identity so the user can sign in by
+// username/password going forward. Otherwise the user is wallet-only
+// (they can add a password later from the profile).
+export async function walletClaim(request, env) {
+    const body = await safeJson(request);
+    if (!body) return json({ error: 'invalid_request' }, 400);
+
+    const ticket = body.ticket;
+    const username = body.username;
+    const password = body.password;        // may be undefined / "" — both treated as "no password"
+
+    if (typeof ticket !== 'string' || ticket.length === 0) {
+        return json({ error: 'invalid_request' }, 400);
+    }
+    if (typeof username !== 'string' || !USERNAME_RE.test(username)) {
+        return json({
+            error: 'invalid_username',
+            message: 'Username must be 3–16 characters, letters/digits/underscore only.',
+        }, 400);
+    }
+    const passwordSupplied = typeof password === 'string' && password.length > 0;
+    if (passwordSupplied
+        && (password.length < MIN_PASSWORD_LEN || password.length > MAX_PASSWORD_LEN)) {
+        return json({
+            error: 'invalid_password',
+            message: `Password must be ${MIN_PASSWORD_LEN}–${MAX_PASSWORD_LEN} characters.`,
+        }, 400);
+    }
+
+    // Look up ticket. Don't delete yet — only consume on a successful
+    // create. If validation fails downstream the user can retry the
+    // claim with a different username without re-signing.
+    const ticketKey = 'siwe_claim:' + ticket;
+    const ticketRaw = await env.AUTH_KV.get(ticketKey);
+    if (!ticketRaw) {
+        return json({ error: 'ticket_invalid_or_expired' }, 400);
+    }
+    let ticketData;
+    try { ticketData = JSON.parse(ticketRaw); }
+    catch (_) { return json({ error: 'ticket_corrupted' }, 400); }
+    const address = ticketData.address;
+    if (typeof address !== 'string' || !/^0x[a-f0-9]{40}$/.test(address)) {
+        return json({ error: 'ticket_corrupted' }, 400);
+    }
+
+    // Pre-flight uniqueness checks. The UNIQUE indexes catch races
+    // anyway, but checking first lets us return clean 409s instead of
+    // half-creating an orphan users row.
+    const bespokeExternalId = username.toLowerCase();
+
+    const nameClash = await one(env,
+        'SELECT id FROM users WHERE display_name = ?',
+        username,
+    );
+    if (nameClash) return json({ error: 'username_taken' }, 409);
+
+    const addrClash = await one(env,
+        'SELECT id FROM auth_identities WHERE provider = ? AND external_id = ?',
+        'ethereum', address,
+    );
+    if (addrClash) return json({ error: 'identity_already_claimed' }, 409);
+
+    if (passwordSupplied) {
+        const bespokeClash = await one(env,
+            'SELECT id FROM auth_identities WHERE provider = ? AND external_id = ?',
+            'bespoke', bespokeExternalId,
+        );
+        // A bespoke clash here would only happen if someone snagged the
+        // same username between the user starting this flow and now.
+        // Same friendly message as the users-name clash.
+        if (bespokeClash) return json({ error: 'username_taken' }, 409);
+    }
+
+    // Consume the ticket. Past this point we're committed to creating
+    // the account or surfacing a 500-class error.
+    await env.AUTH_KV.delete(ticketKey);
+
+    const nowMs = Date.now();
+
+    const insertUser = await run(env,
+        'INSERT INTO users(display_name, created_at) VALUES(?, ?)',
+        username, nowMs,
+    );
+    const userId = insertUser.meta.last_row_id;
+
+    await run(env,
+        'INSERT INTO auth_identities(user_id, provider, external_id, credential, created_at) VALUES(?, ?, ?, ?, ?)',
+        userId, 'ethereum', address, null, nowMs,
+    );
+
+    if (passwordSupplied) {
+        const credential = await hashPassword(password);
+        await run(env,
+            'INSERT INTO auth_identities(user_id, provider, external_id, credential, created_at) VALUES(?, ?, ?, ?, ?)',
+            userId, 'bespoke', bespokeExternalId, credential, nowMs,
+        );
+    }
+
+    const user = { id: userId, display_name: username, status: 'active', mmr: 1500 };
+    const token = await issueSession(env, user);
+    return json({ token, user });
 }

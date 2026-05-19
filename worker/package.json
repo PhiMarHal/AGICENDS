@@ -10,6 +10,10 @@
         "db:apply": "wrangler d1 execute agiscends --file=./schema.sql --remote",
         "db:apply-local": "wrangler d1 execute agiscends --file=./schema.sql --local"
     },
+    "dependencies": {
+        "@noble/curves": "^1.6.0",
+        "@noble/hashes": "^1.5.0"
+    },
     "devDependencies": {
         "wrangler": "^3.0.0"
     }

@@ -21,17 +21,18 @@ database_name = "agiscends"
 database_id = "f30ade41-8522-429d-a1c1-6d171f9d7547"
 
 # ── KV namespace for short-lived state ─────────────────────────────────────
-# Stores OAuth nonces (state parameters during the redirect dance) and any
-# rate-limit counters we add later. Items have short TTLs and never grow
-# unbounded.
+# Stores SIWE nonces (issued by /auth/wallet/nonce, consumed by /verify) and
+# wallet claim tickets (issued by /verify for new identities, consumed by
+# /auth/wallet/claim). Items have short TTLs (10 min) and never grow
+# unbounded. Also reserved for any rate-limit counters we add later.
 # Run `wrangler kv namespace create AUTH_KV` and paste the returned id below.
 [[kv_namespaces]]
 binding = "AUTH_KV"
 id = "7b1fe26978454b47a8d4d7751499dc67"
 
 # ── Public (non-secret) env vars ───────────────────────────────────────────
-# Secrets (JWT_SECRET, GAME_SERVER_SHARED_SECRET, OAuth client secrets) are
-# NEVER put here — set them with `wrangler secret put NAME`.
+# Secrets (JWT_SECRET, GAME_SERVER_SHARED_SECRET) are NEVER put here — set
+# them with `wrangler secret put NAME`.
 [vars]
 # Comma-separated origins allowed to call the Worker from a browser. Add
 # your real domain when you have one. localhost:2567 is the game's dev port.
@@ -41,6 +42,7 @@ ALLOWED_ORIGINS = "http://localhost:2567,http://192.168.1.11:2567"
 # leaving existing accounts working. Useful if bot signups appear.
 BESPOKE_SIGNUPS_OPEN = "true"
 
-# The Worker's own public URL — needed so OAuth callbacks can construct
-# absolute redirect URLs back to themselves. Update after first deploy.
-WORKER_PUBLIC_URL = "https://agiscends-auth.example.workers.dev"
+# The Worker's own public URL — currently informational only. Reserved for
+# any future provider that needs to construct absolute callback URLs.
+# Sign In With Ethereum doesn't need it (no redirects).
+WORKER_PUBLIC_URL = "https://agiscends-auth.philoiyaa.workers.dev"

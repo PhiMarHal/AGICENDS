@@ -231,38 +231,44 @@
             min-height: 14px;
         }
 
-        #auth-modal .auth-buttons {
-            display: flex;
-            gap: 8px;
-            margin-top: 14px;
+        /* Optional subtitle line under the modal title. Only populated
+           in 'claim' mode; otherwise empty and (via :empty) hidden. */
+        #auth-subtitle {
+            margin-top: 4px;
+            color: #aaa;
+            font-size: 12px;
+            line-height: 1.4;
         }
 
-        #auth-modal .auth-buttons button {
-            flex: 1;
+        #auth-subtitle:empty {
+            display: none;
+        }
+
+        /* Full-width primary action button. Used for the bespoke submit
+           and the Ethereum button — they share visual weight and span
+           the modal so neither feels like a secondary affordance. */
+        .auth-full-btn {
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
             background: #fff;
             color: #000;
             border: none;
             font-family: monospace;
-            font-size: 13px;
-            padding: 6px 12px;
+            font-size: 14px;
+            font-weight: bold;
+            padding: 10px 12px;
+            margin-top: 14px;
             border-radius: 4px;
             cursor: pointer;
+            text-align: center;
         }
 
-        #auth-modal .auth-buttons button.secondary {
-            background: #333;
-            color: #fff;
-        }
-
-        #auth-modal .auth-buttons button:hover {
+        .auth-full-btn:hover {
             background: #ddd;
         }
 
-        #auth-modal .auth-buttons button.secondary:hover {
-            background: #444;
-        }
-
-        #auth-modal .auth-buttons button:disabled {
+        .auth-full-btn:disabled {
             opacity: 0.5;
             cursor: not-allowed;
         }
@@ -278,6 +284,27 @@
 
         #auth-toggle-link:hover {
             color: #ccc;
+        }
+
+        /* "OR" divider between the bespoke flow and the Ethereum flow.
+           Two thin lines flanking the word; dimmed to match the modal. */
+        #auth-divider {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 14px 0 0 0;
+            color: #666;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        #auth-divider::before,
+        #auth-divider::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: #333;
         }
 
         /* MMR line under Sign Out button */
@@ -589,23 +616,23 @@
         </div>
     </div>
 
-    <!-- Auth modal (sign in / sign up). Hidden by default. -->
+    <!-- Auth modal (sign in / sign up / claim wallet username). Hidden by default. -->
     <div id="auth-overlay">
         <div id="auth-modal">
             <h2 id="auth-title">Sign in</h2>
-            <label>Username
+            <div id="auth-subtitle"></div>
+            <label id="auth-username-label">Username
                 <input type="text" id="auth-username" autocomplete="username" maxlength="16" autocapitalize="off"
                     autocorrect="off" spellcheck="false">
             </label>
-            <label>Password
+            <label id="auth-password-label">Password
                 <input type="password" id="auth-password" autocomplete="current-password" maxlength="64">
             </label>
             <div id="auth-error"></div>
-            <div class="auth-buttons">
-                <button class="secondary" id="auth-cancel">Cancel</button>
-                <button id="auth-submit">Sign in</button>
-            </div>
+            <button class="auth-full-btn" id="auth-submit" type="button">Sign In With Account</button>
             <div id="auth-toggle-link">Don't have an account? Sign up</div>
+            <div id="auth-divider">or</div>
+            <button class="auth-full-btn" id="auth-eth-btn" type="button">Sign In With Ethereum</button>
         </div>
     </div>
 
@@ -816,6 +843,8 @@
             if (result.error === 'invalid_password') return result.message || 'Invalid password.';
             if (result.error === 'invalid_credentials') return 'Wrong username or password.';
             if (result.error === 'signups_closed') return 'Sign-ups are currently closed.';
+            if (result.error === 'ticket_invalid_or_expired') return 'Wallet session expired. Try Sign In With Ethereum again.';
+            if (result.error === 'identity_already_claimed') return 'That wallet is already linked to another account.';
             return result.message || ('Error: ' + (result.error || 'unknown'));
         }
 
@@ -841,27 +870,63 @@
 
         const authOverlay = document.getElementById('auth-overlay');
         const authTitle = document.getElementById('auth-title');
+        const authSubtitle = document.getElementById('auth-subtitle');
         const authUsername = document.getElementById('auth-username');
         const authPassword = document.getElementById('auth-password');
+        const authPasswordLabel = document.getElementById('auth-password-label');
         const authSubmit = document.getElementById('auth-submit');
-        const authCancel = document.getElementById('auth-cancel');
         const authToggleLink = document.getElementById('auth-toggle-link');
+        const authDivider = document.getElementById('auth-divider');
+        const authEthBtn = document.getElementById('auth-eth-btn');
         const authError = document.getElementById('auth-error');
         const menuAuthBtn = document.getElementById('menu-auth-btn');
 
-        let authMode = 'signin';   // 'signin' | 'signup'
+        // Modes:
+        //   'signin' — username + password, both required
+        //   'signup' — same, going to bespoke signup
+        //   'claim'  — finishing a wallet sign-in: pick a username, password
+        //              is OPTIONAL. The modal toggle/divider/ethereum-button
+        //              rows are hidden in this mode (you can't switch flows
+        //              mid-claim — the ticket is already minted).
+        let authMode = 'signin';
+
+        // When in 'claim' mode this holds the server-issued ticket from
+        // /auth/wallet/verify. Cleared on close or successful claim.
+        let walletClaimTicket = null;
 
         function refreshAuthModalUI() {
+            // Reset visibility for non-claim modes; we'll re-hide things
+            // below when authMode === 'claim'.
+            authToggleLink.style.display = '';
+            authDivider.style.display = '';
+            authEthBtn.style.display = '';
+            authPasswordLabel.style.display = '';
+            authSubtitle.textContent = '';
+
             if (authMode === 'signin') {
                 authTitle.textContent = 'Sign in';
-                authSubmit.textContent = 'Sign in';
+                authSubmit.textContent = 'Sign In With Account';
                 authPassword.autocomplete = 'current-password';
+                authPasswordLabel.firstChild.textContent = 'Password';
                 authToggleLink.textContent = "Don't have an account? Sign up";
-            } else {
+            } else if (authMode === 'signup') {
                 authTitle.textContent = 'Sign up';
-                authSubmit.textContent = 'Sign up';
+                authSubmit.textContent = 'Sign Up';
                 authPassword.autocomplete = 'new-password';
+                authPasswordLabel.firstChild.textContent = 'Password';
                 authToggleLink.textContent = 'Already have an account? Sign in';
+            } else if (authMode === 'claim') {
+                authTitle.textContent = 'Choose a username';
+                authSubtitle.textContent =
+                    'Signed in with Ethereum. Pick a username to finish setting up your account.';
+                authSubmit.textContent = 'Create Account';
+                authPassword.autocomplete = 'new-password';
+                // Password is optional in this flow — make that explicit.
+                authPasswordLabel.firstChild.textContent = 'Password (optional)';
+                // No flow-switching from inside the claim step.
+                authToggleLink.style.display = 'none';
+                authDivider.style.display = 'none';
+                authEthBtn.style.display = 'none';
             }
         }
 
@@ -871,22 +936,28 @@
             authError.textContent = '';
             authUsername.value = '';
             authPassword.value = '';
+            authSubmit.disabled = false;
+            authEthBtn.disabled = false;
             authOverlay.classList.add('open');
             setTimeout(() => authUsername.focus(), 0);
         }
         function closeAuthModal() {
             authOverlay.classList.remove('open');
+            authSubmit.disabled = false;
+            authEthBtn.disabled = false;
+            // If we close mid-claim, drop the ticket. The server-side TTL
+            // (10 min) will clean it up eventually anyway; no harm done.
+            walletClaimTicket = null;
         }
-
-        authCancel.addEventListener('click', closeAuthModal);
 
         // Click on the backdrop (but not inside the modal box) closes the modal.
         authOverlay.addEventListener('click', (e) => {
             if (e.target === authOverlay) closeAuthModal();
         });
 
-        // Toggle between signin and signup without closing the modal.
+        // Toggle signin ↔ signup. No-op in claim mode (the link is hidden).
         authToggleLink.addEventListener('click', () => {
+            if (authMode === 'claim') return;
             authMode = (authMode === 'signin') ? 'signup' : 'signin';
             refreshAuthModalUI();
             authError.textContent = '';
@@ -895,6 +966,44 @@
         async function submitAuthForm() {
             const username = authUsername.value.trim();
             const password = authPassword.value;
+
+            if (authMode === 'claim') {
+                // Username required, password optional. Server enforces
+                // length rules — we just check presence here.
+                if (!username) {
+                    authError.textContent = 'Username required.';
+                    return;
+                }
+                if (!walletClaimTicket) {
+                    authError.textContent = 'Wallet session expired. Try Sign In With Ethereum again.';
+                    return;
+                }
+                authError.textContent = '';
+                authSubmit.disabled = true;
+                try {
+                    const body = { ticket: walletClaimTicket, username };
+                    if (password) body.password = password;
+                    const res = await fetch(AUTH_WORKER_URL + '/auth/wallet/claim', {
+                        method: 'POST',
+                        headers: { 'content-type': 'application/json' },
+                        body: JSON.stringify(body),
+                    });
+                    const result = await res.json();
+                    if (result && result.token && result.user) {
+                        walletClaimTicket = null;
+                        finishAuthSuccess(result);
+                    } else {
+                        authError.textContent = friendlyAuthError(result);
+                    }
+                } catch (_) {
+                    authError.textContent = 'Network error. Check your connection.';
+                } finally {
+                    authSubmit.disabled = false;
+                }
+                return;
+            }
+
+            // signin / signup
             if (!username || !password) {
                 authError.textContent = 'Username and password required.';
                 return;
@@ -906,28 +1015,30 @@
                     ? await authSignIn(username, password)
                     : await authSignUp(username, password);
                 if (result && result.token && result.user) {
-                    setStoredToken(result.token);
-                    // Set client auth state immediately from the response, so
-                    // the menu updates before the reconnect handshake. If the
-                    // game server is in anon mode (no AUTH_WORKER_URL), this
-                    // is still the truth — the Worker confirmed our identity.
-                    currentUser = result.user;
-                    updateMenuFromAuth();
-                    closeAuthModal();
-                    // Disconnect and reconnect so the server sees us authed.
-                    // Safe to do because the modal is only reachable from the
-                    // menu — the player isn't mid-round when this fires.
-                    if (ws && ws.readyState === WebSocket.OPEN) ws.close();
-                    connect();
+                    finishAuthSuccess(result);
                 } else {
                     authError.textContent = friendlyAuthError(result);
                 }
-            } catch (err) {
+            } catch (_) {
                 authError.textContent = 'Network error. Check your connection.';
             } finally {
                 authSubmit.disabled = false;
             }
         }
+
+        // Shared post-auth handler: store the token, update the menu,
+        // close the modal, reconnect the WebSocket so the game server
+        // sees us as the new identity. Safe to run from any of the auth
+        // paths (bespoke signin/signup, wallet claim).
+        function finishAuthSuccess(result) {
+            setStoredToken(result.token);
+            currentUser = result.user;
+            updateMenuFromAuth();
+            closeAuthModal();
+            if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+            connect();
+        }
+
         authSubmit.addEventListener('click', submitAuthForm);
         // Enter from either input triggers submit.
         [authUsername, authPassword].forEach(el => {
@@ -960,6 +1071,135 @@
                 openAuthModal('signin');
             }
         });
+
+        // ── Sign In With Ethereum (SIWE / EIP-4361) ───────────────────
+        //
+        // Implicitly advanced: if the user doesn't have an injected
+        // wallet (window.ethereum), we show a short error inline. We
+        // don't link them to install one — this is meant for crypto-
+        // native users.
+        //
+        // Flow:
+        //   1. Ask the wallet for the connected address.
+        //   2. GET /auth/wallet/nonce — server returns a one-time nonce.
+        //   3. Build the EIP-4361 message and ask the wallet to
+        //      personal_sign it.
+        //   4. POST /auth/wallet/verify { message, signature, address }
+        //      Either we're logged in (token + user) or we get a
+        //      claim_ticket to take into the username-picker step.
+        //   5. If claim_ticket: switch the modal into 'claim' mode and
+        //      let the user pick a display_name (and optional password).
+        async function signInWithEthereum() {
+            if (!window.ethereum) {
+                authError.textContent = 'No wallet detected.';
+                return;
+            }
+            authError.textContent = '';
+            authEthBtn.disabled = true;
+            try {
+                // 1. Request accounts. Wallets typically prompt the user
+                //    here if the site hasn't been authorized before.
+                const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+                if (!accounts || accounts.length === 0) {
+                    authError.textContent = 'No accounts available.';
+                    return;
+                }
+                const address = accounts[0];
+
+                // 2. Get a fresh nonce.
+                const nonceRes = await fetch(AUTH_WORKER_URL + '/auth/wallet/nonce');
+                const nonceData = await nonceRes.json();
+                if (!nonceData || !nonceData.nonce) {
+                    authError.textContent = 'Wallet sign-in unavailable right now.';
+                    return;
+                }
+
+                // 3. Build the EIP-4361 message. Fields exactly match
+                //    what parseSiweMessage on the server expects (it
+                //    needs the address line and the Nonce: line).
+                const domain = window.location.host;
+                const uri = window.location.origin;
+                const issuedAt = new Date().toISOString();
+                const message =
+                    domain + ' wants you to sign in with your Ethereum account:\n' +
+                    address + '\n' +
+                    '\n' +
+                    (nonceData.statement || 'Sign in.') + '\n' +
+                    '\n' +
+                    'URI: ' + uri + '\n' +
+                    'Version: 1\n' +
+                    'Chain ID: 1\n' +
+                    'Nonce: ' + nonceData.nonce + '\n' +
+                    'Issued At: ' + issuedAt;
+
+                // 4. Sign.
+                let signature;
+                try {
+                    signature = await window.ethereum.request({
+                        method: 'personal_sign',
+                        params: [message, address],
+                    });
+                } catch (signErr) {
+                    // 4001 = user rejected. Other codes = wallet issues
+                    // we don't need to interpret deeply.
+                    if (signErr && (signErr.code === 4001 || signErr.code === 'ACTION_REJECTED')) {
+                        authError.textContent = 'Sign request rejected.';
+                    } else {
+                        authError.textContent = 'Wallet failed to sign.';
+                    }
+                    return;
+                }
+
+                // 5. Verify with our server.
+                const verifyRes = await fetch(AUTH_WORKER_URL + '/auth/wallet/verify', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ message, signature, address }),
+                });
+                const verifyData = await verifyRes.json();
+
+                if (verifyData && verifyData.token && verifyData.user) {
+                    // Existing identity → straight to logged in.
+                    finishAuthSuccess(verifyData);
+                } else if (verifyData && verifyData.claim_ticket) {
+                    // New identity → switch modal to claim mode and
+                    // wait for the user to pick a username.
+                    walletClaimTicket = verifyData.claim_ticket;
+                    authMode = 'claim';
+                    refreshAuthModalUI();
+                    authError.textContent = '';
+                    authUsername.value = '';
+                    authPassword.value = '';
+                    setTimeout(() => authUsername.focus(), 0);
+                } else {
+                    authError.textContent = friendlyWalletError(verifyData);
+                }
+            } catch (err) {
+                console.error('Wallet sign-in error:', err);
+                authError.textContent = 'Wallet sign-in failed.';
+            } finally {
+                authEthBtn.disabled = false;
+            }
+        }
+
+        // Translate server-side wallet error codes into modal-friendly
+        // text. Anything we don't have a phrasing for falls through to
+        // the raw code so we still surface something useful.
+        function friendlyWalletError(result) {
+            if (!result) return 'Wallet sign-in failed.';
+            switch (result.error) {
+                case 'invalid_signature': return 'Signature didn\'t verify.';
+                case 'signature_mismatch': return 'Signature didn\'t match the wallet address.';
+                case 'address_mismatch': return 'Wallet address didn\'t match the signed message.';
+                case 'nonce_invalid_or_expired': return 'Sign-in took too long. Please try again.';
+                case 'malformed_message': return 'Internal: malformed sign-in message.';
+                case 'invalid_address': return 'Invalid wallet address.';
+                case 'account_disabled': return 'This account has been disabled.';
+                default: return 'Wallet sign-in failed: ' + (result.error || 'unknown');
+            }
+        }
+
+        authEthBtn.addEventListener('click', signInWithEthereum);
 
         // ── Leaderboard ───────────────────────────────────────────────
         const leaderboardOverlay = document.getElementById('leaderboard-overlay');

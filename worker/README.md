@@ -1,27 +1,27 @@
 # AGISCENDS auth + stats Worker
 
 Cloudflare Worker handling all authentication (bespoke username+password,
-plus Twitter / Google / Farcaster OAuth) and persistent match-result
-storage for AGISCENDS. The game server (`server.js`) stays focused on
-gameplay; it talks to this Worker over HTTPS to verify session tokens
-and record match results.
-
-This is the **skeleton**: all routes are wired up, the JWT and CORS
-machinery work, and the database is ready — but each auth provider's
-handlers currently return `{ error: "not_implemented" }`. We'll fill
-them in one section at a time.
+plus Sign In With Ethereum) and persistent match-result storage for
+AGISCENDS. The game server (`server.js`) stays focused on gameplay; it
+talks to this Worker over HTTPS to verify session tokens and record
+match results.
 
 ## Architecture in one paragraph
 
-The browser handles its own OAuth dances with this Worker (browser opens
-`/auth/twitter/start`, gets redirected to Twitter, comes back to
-`/auth/twitter/callback`, Worker issues a JWT). Bespoke signup/signin
-posts directly to this Worker and gets a JWT. The client stores the JWT
+Bespoke signup/signin posts username+password directly to this Worker
+and gets a JWT. Sign In With Ethereum is a three-step exchange: the
+client gets a nonce, has the user's wallet sign an EIP-4361 message
+including that nonce, and posts the signature back to be verified by
+ecrecover server-side. Either way, the client stores the resulting JWT
 and sends it when connecting to the game's WebSocket. The game server,
 on each WebSocket connect, POSTs the JWT to this Worker's `/auth/verify`
 endpoint and gets back the user info (or a 401). At round end, the game
 server POSTs the result to `/stats/record`, authenticated with a
 server-to-server shared secret.
+
+A single account can have both a bespoke identity and an Ethereum
+identity attached — they're separate rows in `auth_identities` pointing
+at the same `users` row. Users can sign in either way once linked.
 
 ## File map
 
@@ -29,11 +29,12 @@ server-to-server shared secret.
 | ----------------- | --------------------------------------------------------------- |
 | `wrangler.toml`   | Deployment config: D1 binding, KV binding, env vars             |
 | `schema.sql`      | D1 tables: users, auth_identities, matches, match_players       |
+| `package.json`    | npm dependencies — `@noble/curves`, `@noble/hashes` for SIWE    |
 | `index.js`        | Entry, router, CORS, JSON helpers, D1 helpers, route wiring     |
-| `auth.js`         | JWT + sessions + bespoke + Twitter + Google + Farcaster         |
+| `auth.js`         | JWT + sessions + bespoke + Ethereum                             |
 | `stats.js`        | Match recording + stat queries                                  |
 
-Each of `index.js` and `auth.js` is organised by `§SECTION` markers — search for `§ROUTES`, `§TWITTER`, etc. to jump around.
+Each of `index.js` and `auth.js` is organised by `§SECTION` markers — search for `§ROUTES`, `§ETHEREUM`, etc. to jump around.
 
 ## One-time setup
 
@@ -99,6 +100,26 @@ Update `ALLOWED_ORIGINS` to include your domain(s):
 ```
 ALLOWED_ORIGINS = "http://localhost:2567,https://agiscends.example.com"
 ```
+
+### 7. Sign In With Ethereum
+
+No setup required — SIWE is trustless. The Worker doesn't talk to an
+external service; it verifies signatures locally using `@noble/curves`
+and `@noble/hashes` (pulled in as dependencies via `npm install`). The
+flow is:
+
+1. Client GETs `/auth/wallet/nonce` — gets a random nonce.
+2. Client asks the wallet (MetaMask, Rabby, Coinbase Wallet, etc.) to
+   sign an EIP-4361 message containing that nonce.
+3. Client POSTs `/auth/wallet/verify` with `{ message, signature,
+   address }`. Worker recovers the address from the signature and
+   compares.
+4. If this address is already linked to a user → session token.
+   Otherwise → claim ticket, and the client prompts for a username
+   (+ optional password) before POSTing `/auth/wallet/claim`.
+
+The first time you deploy this, run `npm install` in the `worker/`
+directory so wrangler can bundle the noble libraries.
 
 ## Running locally
 
