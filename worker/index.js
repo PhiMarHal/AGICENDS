@@ -225,6 +225,7 @@ router.get('/me/profile', auth.meProfile);
 router.get('/me/matches', auth.meMatches);
 router.post('/me/set-password', auth.meSetPassword);
 router.post('/me/link-wallet/verify', auth.meLinkWalletVerify);
+router.post('/me/unlink-wallet', auth.meUnlinkWallet);
 
 // Stats — server-to-server write, public reads.
 router.post('/stats/record', stats.recordMatch);

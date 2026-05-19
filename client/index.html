@@ -330,7 +330,9 @@
         }
 
         /* Profile link — opens the Profile modal. Same shape as the
-           leaderboard link, just lives in the auth section of the menu. */
+           leaderboard link, just lives in the auth section of the menu.
+           Small top margin separates it visually from the MMR line
+           above without needing an <hr>. */
         #menu-profile-link {
             color: #ccc;
             font-family: monospace;
@@ -338,6 +340,7 @@
             text-decoration: underline;
             cursor: pointer;
             padding: 2px 0;
+            margin-top: 8px;
         }
 
         #menu-profile-link:hover {
@@ -633,6 +636,7 @@
         }
 
         #profile-matches {
+            min-height: 180px;
             max-height: 180px;
             overflow-y: auto;
             border: 1px solid #222;
@@ -648,20 +652,52 @@
         }
 
         .profile-match-date {
-            width: 92px;
             color: #888;
+            flex-shrink: 0;
         }
 
         .profile-match-rank {
-            width: 44px;
             color: #aaa;
             text-align: right;
-            padding-right: 8px;
+            padding-right: 10px;
+            flex-shrink: 0;
         }
 
         .profile-match-score {
-            flex: 1;
             text-align: right;
+            color: #fff;
+            flex-shrink: 0;
+        }
+
+        /* Devils row layout:
+             [date 130px][...empty space...][rank][score]
+           margin-left: auto on the rank consumes the slack between
+           date and rank+score, pushing rank+score against the right
+           edge. Result: rank sits just left of score with a small
+           gap, both on the right. */
+        .profile-match-row.devils .profile-match-date {
+            width: 130px;
+        }
+
+        .profile-match-row.devils .profile-match-rank {
+            width: 48px;
+            margin-left: auto;
+        }
+
+        .profile-match-row.devils .profile-match-score {
+            width: 60px;
+        }
+
+        /* Angels row layout: no rank column (Angels is co-op). Score
+           pushed right by the same auto-margin trick.
+             [date 130px][...empty...][score] */
+        .profile-match-row.angels .profile-match-date {
+            width: 130px;
+        }
+
+        .profile-match-row.angels .profile-match-score {
+            width: 60px;
+            margin-left: auto;
         }
 
         .profile-empty {
@@ -713,22 +749,57 @@
             cursor: not-allowed;
         }
 
-        /* Inline password form — hidden by default, shown when the
-           "Set" / "Change" action button is clicked. */
-        #profile-pw-form {
+        /* Password modal — its own overlay rather than an inline form
+           inside Profile. Focuses attention on the change/enable
+           operation without rearranging the Profile beneath it. */
+        #profile-pw-overlay {
             display: none;
-            margin-top: 6px;
-            padding: 8px 10px;
-            background: #111;
-            border: 1px solid #222;
-            border-radius: 4px;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 30;
+            align-items: center;
+            justify-content: center;
         }
 
-        #profile-pw-form.open {
-            display: block;
+        #profile-pw-overlay.open {
+            display: flex;
         }
 
-        #profile-pw-form input[type=password] {
+        #profile-pw-panel {
+            position: relative;
+            background: rgba(0, 0, 0, 0.95);
+            color: #fff;
+            font-family: monospace;
+            font-size: 13px;
+            padding: 16px 20px;
+            border-radius: 6px;
+            width: 320px;
+            max-width: 90vw;
+            box-sizing: border-box;
+        }
+
+        #profile-pw-panel h2 {
+            margin: 0 0 12px 0;
+            font-size: 16px;
+            font-weight: normal;
+        }
+
+        #profile-pw-close {
+            position: absolute;
+            top: 6px;
+            right: 12px;
+            color: #888;
+            cursor: pointer;
+            font-size: 22px;
+            line-height: 1;
+        }
+
+        #profile-pw-close:hover {
+            color: #fff;
+        }
+
+        #profile-pw-panel input[type=password] {
             display: block;
             width: 100%;
             box-sizing: border-box;
@@ -739,18 +810,18 @@
             padding: 6px 8px;
             font-family: monospace;
             font-size: 13px;
-            margin: 4px 0;
+            margin: 6px 0;
         }
 
-        #profile-pw-form input[type=password]:focus {
+        #profile-pw-panel input[type=password]:focus {
             outline: none;
             border-color: #888;
         }
 
         #profile-pw-buttons {
             display: flex;
-            gap: 6px;
-            margin-top: 6px;
+            gap: 8px;
+            margin-top: 10px;
         }
 
         #profile-pw-buttons button {
@@ -780,6 +851,85 @@
             margin-top: 4px;
         }
 
+        /* ── Generic confirm dialog ────────────────────────────────────
+           A styled in-app replacement for window.confirm(). Used by
+           destructive actions like Unlink Wallet and Remove Password.
+           Sits above all other modals (z 35 > profile 25 > auth 30) so
+           it can prompt over any of them. */
+        #confirm-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 35;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #confirm-overlay.open {
+            display: flex;
+        }
+
+        #confirm-panel {
+            background: rgba(0, 0, 0, 0.95);
+            color: #fff;
+            font-family: monospace;
+            font-size: 13px;
+            padding: 20px 22px;
+            border-radius: 6px;
+            width: 320px;
+            max-width: 90vw;
+            box-sizing: border-box;
+        }
+
+        #confirm-message {
+            margin-bottom: 16px;
+            line-height: 1.45;
+        }
+
+        #confirm-buttons {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+        }
+
+        #confirm-buttons button {
+            background: #fff;
+            color: #000;
+            border: none;
+            font-family: monospace;
+            font-size: 13px;
+            font-weight: bold;
+            padding: 8px 16px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+
+        #confirm-buttons button:hover {
+            background: #ddd;
+        }
+
+        #confirm-cancel {
+            background: #333;
+            color: #fff;
+        }
+
+        #confirm-cancel:hover {
+            background: #444;
+        }
+
+        /* "Danger" variant for the OK button — used when the action
+           is destructive (delete, remove, unlink). Red signal so the
+           user pauses before clicking. */
+        #confirm-ok.danger {
+            background: #d04040;
+            color: #fff;
+        }
+
+        #confirm-ok.danger:hover {
+            background: #e04040;
+        }
+
         /* ── Mode picker (ANGELS / DEVILS) ─────────────────────────────
            Shown on page load and again whenever the user clicks
            "Switch mode" in the menu. No localStorage persistence — every
@@ -792,7 +942,11 @@
             inset: 0;
             background: rgba(0, 0, 0, 0.35);
             /* soft scrim, lets cathedral show */
-            z-index: 100;
+            /* z-index 15 sits above the canvas (default) but below the
+               menu button (20), menu panel, and every modal overlay
+               (25–30). The picker still blocks pointer events from
+               reaching the canvas — it just doesn't block the menu. */
+            z-index: 15;
             align-items: center;
             justify-content: center;
             color: #fff;
@@ -867,6 +1021,9 @@
             text-decoration: underline;
             cursor: pointer;
             padding: 2px 0;
+            /* Visual gap separating "DEVILS / ANGELS" current-mode label
+               above from the Switch mode / Leaderboards links below. */
+            margin-top: 8px;
         }
 
         #menu-switch-mode-link:hover {
@@ -964,18 +1121,6 @@
                 <span class="profile-account-value" id="profile-pw-status">…</span>
                 <button class="profile-action-btn" id="profile-pw-btn" type="button">Set</button>
             </div>
-            <div id="profile-pw-form">
-                <input type="password" id="profile-pw-current" placeholder="Current password"
-                    autocomplete="current-password" maxlength="64">
-                <input type="password" id="profile-pw-new" placeholder="New password" autocomplete="new-password"
-                    maxlength="64">
-                <div class="profile-error" id="profile-pw-error"></div>
-                <div id="profile-pw-buttons">
-                    <button class="profile-action-btn" id="profile-pw-save" type="button">Save</button>
-                    <button class="profile-action-btn profile-pw-cancel" id="profile-pw-cancel"
-                        type="button">Cancel</button>
-                </div>
-            </div>
 
             <div class="profile-account-row">
                 <span class="profile-account-label">Wallet</span>
@@ -984,6 +1129,38 @@
             </div>
             <div class="profile-error" id="profile-wallet-error"></div>
             <div class="profile-success" id="profile-wallet-success"></div>
+        </div>
+    </div>
+
+    <!-- Password modal — opened from the Profile modal's "Enable/Change"
+         button. Sits at z 30 (above the profile modal at 25, below the
+         confirm dialog at 35) so the destructive-removal confirm can
+         still appear over it. -->
+    <div id="profile-pw-overlay">
+        <div id="profile-pw-panel">
+            <div id="profile-pw-close" title="Close">×</div>
+            <h2 id="profile-pw-title">Change password</h2>
+            <input type="password" id="profile-pw-current" placeholder="Current password"
+                autocomplete="current-password" maxlength="64">
+            <input type="password" id="profile-pw-new" placeholder="New password" autocomplete="new-password"
+                maxlength="64">
+            <div class="profile-error" id="profile-pw-error"></div>
+            <div id="profile-pw-buttons">
+                <button class="profile-action-btn profile-pw-cancel" id="profile-pw-cancel"
+                    type="button">Cancel</button>
+                <button class="profile-action-btn" id="profile-pw-save" type="button">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Generic confirm dialog. Driven by showConfirm() — see JS below. -->
+    <div id="confirm-overlay">
+        <div id="confirm-panel">
+            <div id="confirm-message"></div>
+            <div id="confirm-buttons">
+                <button id="confirm-cancel" type="button">Cancel</button>
+                <button id="confirm-ok" type="button">Confirm</button>
+            </div>
         </div>
     </div>
 
@@ -1325,9 +1502,30 @@
         }
 
         // Click on the backdrop (but not inside the modal box) closes the modal.
-        authOverlay.addEventListener('click', (e) => {
-            if (e.target === authOverlay) closeAuthModal();
-        });
+        // Helper: attach a "click-outside-to-close" handler that only
+        // fires on TRUE backdrop clicks — i.e., both the mousedown and
+        // the click landed on the overlay backdrop itself, not on the
+        // panel inside it. Prevents the surprising case where a user
+        // selects text inside the panel by dragging past its edge and
+        // releases over the backdrop, accidentally dismissing the
+        // modal. Optional `canClose` predicate gates closure (used by
+        // the mode picker, which is sometimes non-cancelable).
+        function attachOverlayBackdropClose(overlay, closeFn, canClose) {
+            let mouseDownOnOverlay = false;
+            overlay.addEventListener('mousedown', (e) => {
+                mouseDownOnOverlay = (e.target === overlay);
+            });
+            overlay.addEventListener('click', (e) => {
+                const wasBackdrop = mouseDownOnOverlay;
+                mouseDownOnOverlay = false;
+                if (e.target !== overlay) return;
+                if (!wasBackdrop) return;
+                if (canClose && !canClose()) return;
+                closeFn();
+            });
+        }
+
+        attachOverlayBackdropClose(authOverlay, closeAuthModal);
 
         // Toggle signin ↔ signup. No-op in claim mode (the link is hidden).
         authToggleLink.addEventListener('click', () => {
@@ -1596,7 +1794,10 @@
         // Account
         const profilePwStatus = document.getElementById('profile-pw-status');
         const profilePwBtn = document.getElementById('profile-pw-btn');
-        const profilePwForm = document.getElementById('profile-pw-form');
+        const profilePwOverlay = document.getElementById('profile-pw-overlay');
+        const profilePwPanel = document.getElementById('profile-pw-panel');
+        const profilePwTitle = document.getElementById('profile-pw-title');
+        const profilePwClose = document.getElementById('profile-pw-close');
         const profilePwCurrent = document.getElementById('profile-pw-current');
         const profilePwNew = document.getElementById('profile-pw-new');
         const profilePwError = document.getElementById('profile-pw-error');
@@ -1613,6 +1814,12 @@
         // "Change". Refreshed every time we (re-)load profile data.
         let profileHasPassword = false;
 
+        // Tracks whether the user currently has an ethereum identity.
+        // Drives the wallet action button: "Link" when false,
+        // "Unlink" when true. Refreshed alongside profileHasPassword
+        // on every loadProfileData() call.
+        let profileHasWallet = false;
+
         // Match history mode. Starts at currentMode so opening the
         // profile matches whichever mode the player is currently in;
         // toggles independently after that.
@@ -1622,7 +1829,7 @@
             if (!currentUser) return;
             profileOverlay.classList.add('open');
             // Reset transient UI state.
-            profilePwForm.classList.remove('open');
+            profilePwOverlay.classList.remove('open');
             profilePwError.textContent = '';
             profileWalletError.textContent = '';
             profileWalletSuccess.textContent = '';
@@ -1641,24 +1848,82 @@
         }
 
         profileClose.addEventListener('click', closeProfileModal);
-        profileOverlay.addEventListener('click', (e) => {
-            if (e.target === profileOverlay) closeProfileModal();
-        });
+        attachOverlayBackdropClose(profileOverlay, closeProfileModal);
         // Don't let pointer events on the panel reach the Phaser canvas.
         profilePanel.addEventListener('pointerdown', e => e.stopPropagation());
         profilePanel.addEventListener('touchstart', e => e.stopPropagation(), { passive: false });
         // Esc closes — but only if no other modal is open ahead of us.
+        // Stacking order (closes outermost first):
+        //   confirm > password > profile
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && profileOverlay.classList.contains('open')) {
-                // The auth overlay has its own Esc handler; if it's also
-                // open, let it handle. Otherwise close us.
-                if (!authOverlay.classList.contains('open')) {
-                    closeProfileModal();
-                }
-            }
+            if (e.key !== 'Escape') return;
+            if (!profileOverlay.classList.contains('open')) return;
+            // Other overlays have their own Esc handlers — defer to them
+            // if they're up.
+            if (authOverlay.classList.contains('open')) return;
+            if (confirmOverlay.classList.contains('open')) return;
+            if (profilePwOverlay.classList.contains('open')) return;
+            closeProfileModal();
+        });
+        // Password modal's own Esc handler — defers to the confirm
+        // dialog when it's stacked on top (during a removal flow).
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape') return;
+            if (!profilePwOverlay.classList.contains('open')) return;
+            if (confirmOverlay.classList.contains('open')) return;
+            closeProfilePwModal();
         });
 
         menuProfileLink.addEventListener('click', openProfileModal);
+
+        // ── Generic confirm dialog (replaces window.confirm) ──────────
+        //
+        // Promise-based. Returns true on confirmation, false on
+        // cancel / Esc / backdrop click. Set okDanger to render the
+        // OK button in red — for destructive actions.
+        //
+        // Usage:
+        //   const ok = await showConfirm({
+        //       message: 'Unlink your wallet?',
+        //       okLabel: 'Unlink',
+        //       okDanger: true,
+        //   });
+        //   if (!ok) return;
+        const confirmOverlay = document.getElementById('confirm-overlay');
+        const confirmPanel = document.getElementById('confirm-panel');
+        const confirmMessage = document.getElementById('confirm-message');
+        const confirmOk = document.getElementById('confirm-ok');
+        const confirmCancel = document.getElementById('confirm-cancel');
+
+        // Holds the currently pending Promise's resolver. We never have
+        // nested confirms — one global slot is enough.
+        let confirmResolver = null;
+
+        function showConfirm({ message, okLabel = 'Confirm', okDanger = false }) {
+            confirmMessage.textContent = message;
+            confirmOk.textContent = okLabel;
+            confirmOk.classList.toggle('danger', !!okDanger);
+            confirmOverlay.classList.add('open');
+            setTimeout(() => confirmOk.focus(), 0);
+            return new Promise((resolve) => { confirmResolver = resolve; });
+        }
+        function resolveConfirm(result) {
+            confirmOverlay.classList.remove('open');
+            const r = confirmResolver;
+            confirmResolver = null;
+            if (r) r(result);
+        }
+
+        confirmOk.addEventListener('click', () => resolveConfirm(true));
+        confirmCancel.addEventListener('click', () => resolveConfirm(false));
+        attachOverlayBackdropClose(confirmOverlay, () => resolveConfirm(false));
+        confirmPanel.addEventListener('pointerdown', e => e.stopPropagation());
+        confirmPanel.addEventListener('touchstart', e => e.stopPropagation(), { passive: false });
+        document.addEventListener('keydown', (e) => {
+            if (!confirmOverlay.classList.contains('open')) return;
+            if (e.key === 'Escape') resolveConfirm(false);
+            else if (e.key === 'Enter') resolveConfirm(true);
+        });
 
         function updateProfileModeButtons() {
             profileModeBtns.forEach(btn => {
@@ -1670,7 +1935,12 @@
                 if (profileMatchMode === btn.dataset.mode) return;
                 profileMatchMode = btn.dataset.mode;
                 updateProfileModeButtons();
-                profileMatches.innerHTML = '<div class="profile-empty">Loading…</div>';
+                // Don't reset the matches box to "Loading…" here — the
+                // CSS min-height keeps the box's size stable, and the
+                // existing rows are an OK placeholder for ~100ms while
+                // the new mode's data arrives. The mode-button visual
+                // flip (above) is the user-facing confirmation that
+                // their click registered.
                 loadProfileMatches();
             });
         });
@@ -1710,8 +1980,8 @@
                     ? data.stats.angels.best_score : '–';
 
                 profileHasPassword = !!data.has_password;
-                profilePwStatus.textContent = profileHasPassword ? 'Set' : 'No password';
-                profilePwBtn.textContent = profileHasPassword ? 'Change' : 'Set';
+                profilePwStatus.textContent = profileHasPassword ? 'Enabled' : 'Disabled';
+                profilePwBtn.textContent = profileHasPassword ? 'Change' : 'Enable';
 
                 if (data.wallet_address) {
                     // Show a short form of the address (first 6 + last 4)
@@ -1721,11 +1991,28 @@
                     const short = a.slice(0, 6) + '…' + a.slice(-4);
                     profileWalletStatus.textContent = short;
                     profileWalletStatus.title = a;
-                    profileWalletBtn.style.display = 'none';
+                    profileHasWallet = true;
+                    profileWalletBtn.textContent = 'Unlink';
+                    profileWalletBtn.style.display = '';
+                    // Unlinking requires having another way back in —
+                    // otherwise the user would lock themselves out.
+                    // Disable the button (with an explanation tooltip)
+                    // until a password is set.
+                    if (profileHasPassword) {
+                        profileWalletBtn.disabled = false;
+                        profileWalletBtn.title = '';
+                    } else {
+                        profileWalletBtn.disabled = true;
+                        profileWalletBtn.title = 'Set a password first to enable unlinking.';
+                    }
                 } else {
                     profileWalletStatus.textContent = 'Not linked';
                     profileWalletStatus.title = '';
+                    profileHasWallet = false;
+                    profileWalletBtn.textContent = 'Link';
                     profileWalletBtn.style.display = '';
+                    profileWalletBtn.disabled = false;
+                    profileWalletBtn.title = '';
                 }
 
                 // Keep menu MMR in sync if it changed (e.g. just earned
@@ -1770,26 +2057,29 @@
             const frag = document.createDocumentFragment();
             for (const m of matches) {
                 const row = document.createElement('div');
-                row.className = 'profile-match-row';
+                // mode class drives the column layout (Devils has a
+                // rank column; Angels doesn't).
+                row.className = 'profile-match-row ' + mode;
 
                 const date = document.createElement('span');
                 date.className = 'profile-match-date';
-                // Date.toISOString lops the time off cleanly; ended_at
-                // is ms since epoch from the server.
-                const d = new Date(m.ended_at);
-                date.textContent = d.toISOString().slice(0, 10);
+                // Local-time YYYY-MM-DD HH:MM. Using ISO bits in UTC
+                // would be technically simpler but confusing for any
+                // user not in the UTC zone; local feels right for a
+                // personal match-history view.
+                date.textContent = formatMatchTimestamp(m.ended_at);
                 row.appendChild(date);
 
-                const rank = document.createElement('span');
-                rank.className = 'profile-match-rank';
-                // Devils: show finishing rank (1st, 2nd, …). Angels is
-                // co-op so finishing_rank is meaningless — show "—".
-                if (mode === 'devils' && m.finishing_rank != null) {
-                    rank.textContent = ordinal(m.finishing_rank);
-                } else {
-                    rank.textContent = '—';
+                // Devils only: finishing-rank column. Angels is co-op,
+                // so rank is meaningless — we just omit the span.
+                if (mode === 'devils') {
+                    const rank = document.createElement('span');
+                    rank.className = 'profile-match-rank';
+                    rank.textContent = m.finishing_rank != null
+                        ? ordinal(m.finishing_rank)
+                        : '—';
+                    row.appendChild(rank);
                 }
-                row.appendChild(rank);
 
                 const score = document.createElement('span');
                 score.className = 'profile-match-score';
@@ -1802,6 +2092,15 @@
             profileMatches.appendChild(frag);
         }
 
+        // Local-time YYYY-MM-DD HH:MM formatter. Pads each component to
+        // a fixed width so the date column stays monospace-aligned.
+        function formatMatchTimestamp(ms) {
+            const d = new Date(ms);
+            const p = (n) => String(n).padStart(2, '0');
+            return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+                + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+        }
+
         // 1 → "1st", 2 → "2nd", 3 → "3rd", 4 → "4th", etc.
         function ordinal(n) {
             const s = ['th', 'st', 'nd', 'rd'];
@@ -1810,39 +2109,105 @@
         }
 
         // ── Set / change password ─────────────────────────────────────
+        // ── Set / change / remove password ────────────────────────────
+        //
+        // Lives in its own modal (#profile-pw-overlay) layered on top
+        // of the Profile modal. Clicking the password row's action
+        // button opens it. The form has three meaningful states:
+        //
+        //   • Disabled → "Enable password" — only a New password field.
+        //   • Enabled, no wallet → "Change password" — Current + New
+        //     fields. No removal option (would lock the user out).
+        //   • Enabled, wallet linked → "Change password" — Current +
+        //     New fields, with New's placeholder hinting that empty
+        //     means removal.
+        //
+        // Submit empties to the appropriate /me/set-password call;
+        // empty new_password is treated by the server as a removal.
+
         profilePwBtn.addEventListener('click', () => {
             profilePwError.textContent = '';
             profilePwCurrent.value = '';
             profilePwNew.value = '';
-            // Hide the current-password field if the user doesn't have
-            // one yet (wallet-only account adding a password for the
-            // first time).
-            profilePwCurrent.style.display = profileHasPassword ? '' : 'none';
-            profilePwForm.classList.add('open');
+            // Title and Current-password visibility key off whether
+            // there's already a password.
+            if (profileHasPassword) {
+                profilePwTitle.textContent = 'Change password';
+                profilePwCurrent.style.display = '';
+            } else {
+                profilePwTitle.textContent = 'Enable password';
+                profilePwCurrent.style.display = 'none';
+            }
+            // Removal hint only when removal is actually possible:
+            // the user has a password AND has another way back in
+            // (currently: a linked wallet). Otherwise the placeholder
+            // stays plain — leaves them no false affordance.
+            profilePwNew.placeholder = (profileHasPassword && profileHasWallet)
+                ? 'New password (or leave empty to remove)'
+                : 'New password';
+            profilePwOverlay.classList.add('open');
             setTimeout(() => {
                 if (profileHasPassword) profilePwCurrent.focus();
                 else profilePwNew.focus();
             }, 0);
         });
-        profilePwCancel.addEventListener('click', () => {
-            profilePwForm.classList.remove('open');
+
+        function closeProfilePwModal() {
+            profilePwOverlay.classList.remove('open');
             profilePwError.textContent = '';
-        });
+            profilePwCurrent.value = '';
+            profilePwNew.value = '';
+        }
+        profilePwCancel.addEventListener('click', closeProfilePwModal);
+        profilePwClose.addEventListener('click', closeProfilePwModal);
+        attachOverlayBackdropClose(profilePwOverlay, closeProfilePwModal);
+        // Block pointer events from leaking through to the canvas.
+        profilePwPanel.addEventListener('pointerdown', e => e.stopPropagation());
+        profilePwPanel.addEventListener('touchstart', e => e.stopPropagation(), { passive: false });
         async function submitProfilePassword() {
             profilePwError.textContent = '';
             const newPw = profilePwNew.value;
-            if (!newPw) {
-                profilePwError.textContent = 'New password required.';
+            const isRemoval = newPw === '' && profileHasPassword;
+
+            // Client-side guard: don't submit a removal that the server
+            // will just reject. Show the lock-out warning inline so
+            // there's no popup over a popup.
+            if (isRemoval && !profileHasWallet) {
+                profilePwError.textContent =
+                    'Link a wallet first — otherwise removing your password would lock you out of this account.';
                 return;
             }
+
+            // The user has no password and submitted an empty new
+            // one — there's nothing to do. Tell them rather than
+            // silently no-op'ing.
+            if (newPw === '' && !profileHasPassword) {
+                profilePwError.textContent = 'Password required.';
+                return;
+            }
+
             const body = { new_password: newPw };
             if (profileHasPassword) {
+                // Required by the server for both change AND removal.
                 if (!profilePwCurrent.value) {
                     profilePwError.textContent = 'Current password required.';
                     return;
                 }
                 body.current_password = profilePwCurrent.value;
             }
+
+            // Destructive — confirm before hitting the server. Using
+            // the styled in-modal confirm (not window.confirm) so the
+            // visual is consistent with the rest of the UI.
+            if (isRemoval) {
+                const ok = await showConfirm({
+                    message: 'Remove your password? You\'ll need your wallet to sign in afterwards.',
+                    okLabel: 'Remove password',
+                    okDanger: true,
+                });
+                if (!ok) return;
+            }
+
             profilePwSave.disabled = true;
             try {
                 const token = getStoredToken();
@@ -1856,14 +2221,17 @@
                 });
                 const data = await res.json();
                 if (res.ok && data.ok) {
-                    profilePwForm.classList.remove('open');
-                    profilePwCurrent.value = '';
-                    profilePwNew.value = '';
-                    // Update local state — they now have a password.
-                    profileHasPassword = true;
-                    profilePwStatus.textContent = 'Set';
-                    profilePwBtn.textContent = 'Change';
+                    closeProfilePwModal();
+                    // Refresh the whole profile so both the password
+                    // row (Enabled/Disabled, Change/Enable button) and
+                    // the wallet button's disabled state stay
+                    // consistent — adding a password unlocks Unlink;
+                    // removing a password locks it.
+                    loadProfileData();
                 } else {
+                    // Server's `message` field already carries a clear
+                    // explanation for codes like no_other_auth_method;
+                    // friendlyAuthError falls back to it.
                     profilePwError.textContent = friendlyAuthError(data);
                 }
             } catch (_) {
@@ -1879,8 +2247,20 @@
             });
         });
 
-        // ── Link wallet ──────────────────────────────────────────────
-        profileWalletBtn.addEventListener('click', async () => {
+        // ── Link / unlink wallet ──────────────────────────────────────
+        // One button, two behaviours depending on whether a wallet is
+        // currently linked. The disabled-with-tooltip state for the
+        // "must set a password first" case is handled in loadProfileData
+        // by toggling profileWalletBtn.disabled.
+        profileWalletBtn.addEventListener('click', () => {
+            if (profileHasWallet) {
+                unlinkWallet();
+            } else {
+                linkWallet();
+            }
+        });
+
+        async function linkWallet() {
             profileWalletError.textContent = '';
             profileWalletSuccess.textContent = '';
             profileWalletBtn.disabled = true;
@@ -1899,7 +2279,7 @@
                 if (res.ok && data.ok) {
                     profileWalletSuccess.textContent = 'Wallet linked.';
                     // Refresh the profile so the wallet row updates to
-                    // show the address and hides the Link button.
+                    // show the address and the button flips to Unlink.
                     loadProfileData();
                 } else {
                     profileWalletError.textContent = friendlyLinkWalletError(data);
@@ -1907,9 +2287,42 @@
             } catch (err) {
                 profileWalletError.textContent = err.message || 'Wallet linking failed.';
             } finally {
+                // loadProfileData() will set the correct disabled state
+                // on success; this re-enables for the failure path.
+                if (!profileHasWallet) profileWalletBtn.disabled = false;
+            }
+        }
+
+        async function unlinkWallet() {
+            profileWalletError.textContent = '';
+            profileWalletSuccess.textContent = '';
+            const ok = await showConfirm({
+                message: 'Unlink your wallet from this account? You can link it again later.',
+                okLabel: 'Unlink',
+                okDanger: true,
+            });
+            if (!ok) return;
+            profileWalletBtn.disabled = true;
+            try {
+                const token = getStoredToken();
+                const res = await fetch(AUTH_WORKER_URL + '/me/unlink-wallet', {
+                    method: 'POST',
+                    headers: { 'authorization': 'Bearer ' + token },
+                });
+                const data = await res.json();
+                if (res.ok && data.ok) {
+                    profileWalletSuccess.textContent = 'Wallet unlinked.';
+                    loadProfileData();
+                } else {
+                    profileWalletError.textContent = friendlyUnlinkWalletError(data);
+                    profileWalletBtn.disabled = false;
+                }
+            } catch (_) {
+                profileWalletError.textContent = 'Network error.';
                 profileWalletBtn.disabled = false;
             }
-        });
+        }
+
         function friendlyLinkWalletError(result) {
             if (!result) return 'Wallet linking failed.';
             switch (result.error) {
@@ -1920,6 +2333,16 @@
                 case 'signature_mismatch':
                 case 'address_mismatch': return 'Signature didn\'t verify.';
                 default: return friendlyWalletError(result);
+            }
+        }
+
+        function friendlyUnlinkWalletError(result) {
+            if (!result) return 'Wallet unlinking failed.';
+            switch (result.error) {
+                case 'no_other_auth_method':
+                    return result.message || 'Set a password first — unlinking would lock you out.';
+                default:
+                    return 'Wallet unlinking failed: ' + (result.error || 'unknown');
             }
         }
 
@@ -2008,9 +2431,7 @@
             });
         });
         // Mobile only: click on backdrop closes (web has no clickable backdrop).
-        leaderboardOverlay.addEventListener('click', (e) => {
-            if (e.target === leaderboardOverlay) closeLeaderboard();
-        });
+        attachOverlayBackdropClose(leaderboardOverlay, closeLeaderboard);
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && leaderboardOverlay.classList.contains('open')) {
                 closeLeaderboard();
@@ -2075,9 +2496,7 @@
             if (myInActiveRound) return;
             showModePicker(true);
         });
-        modePickerOverlay.addEventListener('click', (e) => {
-            if (modePickerCancelable && e.target === modePickerOverlay) hideModePicker();
-        });
+        attachOverlayBackdropClose(modePickerOverlay, hideModePicker, () => modePickerCancelable);
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' &&
                 !modePickerOverlay.classList.contains('hidden') &&

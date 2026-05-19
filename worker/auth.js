@@ -885,21 +885,67 @@ export async function meSetPassword(request, env) {
     if (!body) return json({ error: 'invalid_request' }, 400);
 
     const newPassword = body.new_password;
-    if (typeof newPassword !== 'string'
-        || newPassword.length < MIN_PASSWORD_LEN
+    if (typeof newPassword !== 'string') {
+        return json({ error: 'invalid_password' }, 400);
+    }
+
+    // Does this user already have a bespoke identity? Determines
+    // whether we INSERT, UPDATE, or DELETE.
+    const existing = await one(env,
+        'SELECT id, credential FROM auth_identities WHERE user_id = ? AND provider = ?',
+        user.id, 'bespoke',
+    );
+
+    // ── Empty new_password → removal ──────────────────────────────
+    // Symmetric with /me/unlink-wallet: the user is opting out of
+    // password auth. Guarded against lock-out (must have another way
+    // back in) and gated on current-password verification (the JWT
+    // alone isn't enough for destructive identity changes).
+    if (newPassword === '') {
+        if (!existing) {
+            // Nothing to remove. Could no-op silently; clearer to
+            // tell the client we're confused.
+            return json({ error: 'no_password_to_remove' }, 400);
+        }
+
+        // Any non-bespoke identity counts as "another way in" —
+        // same logic as meUnlinkWallet.
+        const otherAuth = await one(env,
+            `SELECT id FROM auth_identities
+             WHERE user_id = ? AND provider != 'bespoke'
+             LIMIT 1`,
+            user.id,
+        );
+        if (!otherAuth) {
+            return json({
+                error: 'no_other_auth_method',
+                message: 'Link a wallet first — otherwise removing your password would lock you out of this account.',
+            }, 400);
+        }
+
+        if (typeof body.current_password !== 'string' || body.current_password.length === 0) {
+            return json({ error: 'current_password_required' }, 400);
+        }
+        const ok = await verifyPassword(body.current_password, existing.credential);
+        if (!ok) {
+            return json({ error: 'invalid_credentials' }, 401);
+        }
+
+        await run(env,
+            'DELETE FROM auth_identities WHERE id = ?',
+            existing.id,
+        );
+        return json({ ok: true, action: 'removed' });
+    }
+
+    // ── Non-empty → add or change ─────────────────────────────────
+    if (newPassword.length < MIN_PASSWORD_LEN
         || newPassword.length > MAX_PASSWORD_LEN) {
         return json({
             error: 'invalid_password',
             message: `Password must be ${MIN_PASSWORD_LEN}–${MAX_PASSWORD_LEN} characters.`,
         }, 400);
     }
-
-    // Does this user already have a bespoke identity? Determines
-    // whether we UPDATE an existing credential or INSERT a new row.
-    const existing = await one(env,
-        'SELECT id, credential FROM auth_identities WHERE user_id = ? AND provider = ?',
-        user.id, 'bespoke',
-    );
 
     if (existing) {
         // Changing a password — require the current one to prove the
@@ -933,9 +979,6 @@ export async function meSetPassword(request, env) {
         );
     } catch (err) {
         if (String(err).includes('UNIQUE')) {
-            // Means another bespoke identity already owns this
-            // username — shouldn't be possible given the display_name
-            // uniqueness invariant, but cover the case defensively.
             return json({ error: 'username_taken' }, 409);
         }
         throw err;
@@ -969,4 +1012,44 @@ export async function meLinkWalletVerify(request, env) {
         user.id, 'ethereum', address, null, Date.now(),
     );
     return json({ ok: true, address });
+}
+
+// POST /me/unlink-wallet
+//
+// Detach the user's ethereum identity. Guarded: a wallet-only account
+// (no bespoke password) refuses, because unlinking would leave the
+// user with no way back in. The client should prompt them to set a
+// password first and retry.
+//
+// Idempotent w.r.t. having a wallet: if no ethereum identity exists,
+// the DELETE is a no-op and we still return ok. The guard fires on
+// "you have nothing else to log in with" regardless of whether you
+// have a wallet to delete.
+export async function meUnlinkWallet(request, env) {
+    const a = await requireAuth(request, env);
+    if (a.response) return a.response;
+    const user = a.user;
+
+    // Any non-ethereum identity counts as "another way in". Currently
+    // that means bespoke; when we add Farcaster or others, they'll
+    // qualify here too without needing this query to change.
+    const otherAuth = await one(env,
+        `SELECT id FROM auth_identities
+         WHERE user_id = ? AND provider != 'ethereum'
+         LIMIT 1`,
+        user.id,
+    );
+    if (!otherAuth) {
+        return json({
+            error: 'no_other_auth_method',
+            message: 'Set a password first — otherwise unlinking your wallet would lock you out of this account.',
+        }, 400);
+    }
+
+    await run(env,
+        `DELETE FROM auth_identities
+         WHERE user_id = ? AND provider = 'ethereum'`,
+        user.id,
+    );
+    return json({ ok: true });
 }
