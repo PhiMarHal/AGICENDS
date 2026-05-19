@@ -329,6 +329,21 @@
             color: #fff;
         }
 
+        /* Profile link — opens the Profile modal. Same shape as the
+           leaderboard link, just lives in the auth section of the menu. */
+        #menu-profile-link {
+            color: #ccc;
+            font-family: monospace;
+            font-size: 13px;
+            text-decoration: underline;
+            cursor: pointer;
+            padding: 2px 0;
+        }
+
+        #menu-profile-link:hover {
+            color: #fff;
+        }
+
         /* ── Leaderboard modal ─────────────────────────────────────────
            Mobile default: centered with backdrop, takes most of the screen.
            Wide viewports (≥1200px): docks to the right side, transparent
@@ -471,6 +486,300 @@
             }
         }
 
+        /* ── Profile modal ─────────────────────────────────────────────
+           Visual sibling of the leaderboard: same dark panel, same close
+           pill, same mode-toggle button row. Different content sections:
+           a header (display_name + MMR), a 2-column stats grid, a
+           recent-matches list with mode toggle, and an account section
+           with inline forms for setting a password / linking a wallet. */
+        #profile-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 25;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #profile-overlay.open {
+            display: flex;
+        }
+
+        #profile-panel {
+            position: relative;
+            background: rgba(0, 0, 0, 0.95);
+            color: #fff;
+            font-family: monospace;
+            font-size: 13px;
+            padding: 16px 20px;
+            border-radius: 6px;
+            width: 380px;
+            max-width: 90vw;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-sizing: border-box;
+        }
+
+        #profile-panel h2 {
+            margin: 0 0 4px 0;
+            font-size: 16px;
+            font-weight: normal;
+        }
+
+        #profile-panel h3 {
+            margin: 16px 0 6px 0;
+            font-size: 13px;
+            font-weight: normal;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            border-top: 1px solid #333;
+            padding-top: 12px;
+        }
+
+        #profile-close {
+            position: absolute;
+            top: 6px;
+            right: 12px;
+            color: #888;
+            cursor: pointer;
+            font-size: 22px;
+            line-height: 1;
+        }
+
+        #profile-close:hover {
+            color: #fff;
+        }
+
+        #profile-header {
+            margin-top: 8px;
+            font-size: 14px;
+        }
+
+        #profile-displayname {
+            color: #ffd54f;
+            font-size: 16px;
+            margin-bottom: 2px;
+        }
+
+        #profile-mmr {
+            color: #aaa;
+        }
+
+        /* Two columns: Devils stats on the left, Angels stats on the
+           right. The columns are independent boxes — Angels lacks a
+           wins line, which would otherwise look like a missing field. */
+        #profile-stats-grid {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .profile-stats-box {
+            flex: 1;
+            background: #111;
+            border: 1px solid #222;
+            border-radius: 4px;
+            padding: 8px 10px;
+        }
+
+        .profile-stats-title {
+            color: #888;
+            font-size: 11px;
+            letter-spacing: 1px;
+            margin-bottom: 4px;
+        }
+
+        .profile-stat-line {
+            color: #ccc;
+            padding: 1px 0;
+        }
+
+        .profile-stat-line .v {
+            color: #fff;
+        }
+
+        /* Mode toggle for the match-history list — same look as the
+           leaderboard's, just a separate class so we can rebind events
+           without confusing the two. */
+        #profile-mode-toggle {
+            display: flex;
+            gap: 8px;
+            margin: 6px 0 8px 0;
+            justify-content: center;
+        }
+
+        .profile-mode-btn {
+            background: transparent;
+            color: #888;
+            border: 1px solid #444;
+            padding: 4px 14px;
+            cursor: pointer;
+            font-family: monospace;
+            font-size: 12px;
+            letter-spacing: 1px;
+        }
+
+        .profile-mode-btn:hover {
+            color: #fff;
+            border-color: #777;
+        }
+
+        .profile-mode-btn.active {
+            color: #000;
+            background: #fff;
+            border-color: #fff;
+        }
+
+        #profile-matches {
+            max-height: 180px;
+            overflow-y: auto;
+            border: 1px solid #222;
+            border-radius: 4px;
+            padding: 4px 8px;
+        }
+
+        .profile-match-row {
+            display: flex;
+            padding: 2px 0;
+            white-space: nowrap;
+            font-size: 12px;
+        }
+
+        .profile-match-date {
+            width: 92px;
+            color: #888;
+        }
+
+        .profile-match-rank {
+            width: 44px;
+            color: #aaa;
+            text-align: right;
+            padding-right: 8px;
+        }
+
+        .profile-match-score {
+            flex: 1;
+            text-align: right;
+        }
+
+        .profile-empty {
+            color: #888;
+            padding: 6px 0;
+            font-size: 12px;
+        }
+
+        /* Account section — one row per identity type. Action button
+           on the right; status label in the middle. Inline forms slide
+           in below the row when the action button is clicked. */
+        .profile-account-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 0;
+        }
+
+        .profile-account-label {
+            width: 70px;
+            color: #888;
+        }
+
+        .profile-account-value {
+            flex: 1;
+            color: #ccc;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .profile-action-btn {
+            background: #fff;
+            color: #000;
+            border: none;
+            font-family: monospace;
+            font-size: 12px;
+            font-weight: bold;
+            padding: 4px 12px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+
+        .profile-action-btn:hover {
+            background: #ddd;
+        }
+
+        .profile-action-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Inline password form — hidden by default, shown when the
+           "Set" / "Change" action button is clicked. */
+        #profile-pw-form {
+            display: none;
+            margin-top: 6px;
+            padding: 8px 10px;
+            background: #111;
+            border: 1px solid #222;
+            border-radius: 4px;
+        }
+
+        #profile-pw-form.open {
+            display: block;
+        }
+
+        #profile-pw-form input[type=password] {
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
+            background: #000;
+            color: #fff;
+            border: 1px solid #444;
+            border-radius: 3px;
+            padding: 6px 8px;
+            font-family: monospace;
+            font-size: 13px;
+            margin: 4px 0;
+        }
+
+        #profile-pw-form input[type=password]:focus {
+            outline: none;
+            border-color: #888;
+        }
+
+        #profile-pw-buttons {
+            display: flex;
+            gap: 6px;
+            margin-top: 6px;
+        }
+
+        #profile-pw-buttons button {
+            flex: 1;
+        }
+
+        .profile-pw-cancel {
+            background: #333 !important;
+            color: #fff !important;
+        }
+
+        .profile-pw-cancel:hover {
+            background: #444 !important;
+        }
+
+        .profile-error {
+            color: #ff6b6b;
+            font-size: 12px;
+            min-height: 16px;
+            margin-top: 4px;
+        }
+
+        .profile-success {
+            color: #6bcb77;
+            font-size: 12px;
+            min-height: 16px;
+            margin-top: 4px;
+        }
+
         /* ── Mode picker (ANGELS / DEVILS) ─────────────────────────────
            Shown on page load and again whenever the user clicks
            "Switch mode" in the menu. No localStorage persistence — every
@@ -583,6 +892,7 @@
         <hr>
         <button id="menu-auth-btn">Sign in</button>
         <div id="menu-mmr" style="display:none">1500 MMR</div>
+        <div id="menu-profile-link" style="display:none">Profile</div>
         <hr>
         <div id="menu-current-mode">DEVILS</div>
         <div id="menu-switch-mode-link">Switch mode</div>
@@ -613,6 +923,67 @@
                 <button class="leaderboard-mode-btn" data-mode="devils">DEVILS</button>
                 <button class="leaderboard-mode-btn" data-mode="angels">ANGELS</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Profile modal (header / per-mode stats / recent matches / account actions). -->
+    <div id="profile-overlay">
+        <div id="profile-panel">
+            <div id="profile-close" title="Close">×</div>
+            <h2>Profile</h2>
+            <div id="profile-header">
+                <div id="profile-displayname">…</div>
+                <div id="profile-mmr">…</div>
+            </div>
+            <div id="profile-stats-grid">
+                <div class="profile-stats-box">
+                    <div class="profile-stats-title">DEVILS</div>
+                    <div class="profile-stat-line">games <span class="v" id="profile-devils-games">0</span></div>
+                    <div class="profile-stat-line">wins <span class="v" id="profile-devils-wins">0</span></div>
+                    <div class="profile-stat-line">best <span class="v" id="profile-devils-best">–</span></div>
+                </div>
+                <div class="profile-stats-box">
+                    <div class="profile-stats-title">ANGELS</div>
+                    <div class="profile-stat-line">games <span class="v" id="profile-angels-games">0</span></div>
+                    <div class="profile-stat-line">best <span class="v" id="profile-angels-best">–</span></div>
+                </div>
+            </div>
+
+            <h3>Recent matches</h3>
+            <div id="profile-mode-toggle">
+                <button class="profile-mode-btn active" data-mode="devils">DEVILS</button>
+                <button class="profile-mode-btn" data-mode="angels">ANGELS</button>
+            </div>
+            <div id="profile-matches">
+                <div class="profile-empty">Loading…</div>
+            </div>
+
+            <h3>Account</h3>
+            <div class="profile-account-row">
+                <span class="profile-account-label">Password</span>
+                <span class="profile-account-value" id="profile-pw-status">…</span>
+                <button class="profile-action-btn" id="profile-pw-btn" type="button">Set</button>
+            </div>
+            <div id="profile-pw-form">
+                <input type="password" id="profile-pw-current" placeholder="Current password"
+                    autocomplete="current-password" maxlength="64">
+                <input type="password" id="profile-pw-new" placeholder="New password" autocomplete="new-password"
+                    maxlength="64">
+                <div class="profile-error" id="profile-pw-error"></div>
+                <div id="profile-pw-buttons">
+                    <button class="profile-action-btn" id="profile-pw-save" type="button">Save</button>
+                    <button class="profile-action-btn profile-pw-cancel" id="profile-pw-cancel"
+                        type="button">Cancel</button>
+                </div>
+            </div>
+
+            <div class="profile-account-row">
+                <span class="profile-account-label">Wallet</span>
+                <span class="profile-account-value" id="profile-wallet-status">…</span>
+                <button class="profile-action-btn" id="profile-wallet-btn" type="button">Link</button>
+            </div>
+            <div class="profile-error" id="profile-wallet-error"></div>
+            <div class="profile-success" id="profile-wallet-success"></div>
         </div>
     </div>
 
@@ -854,6 +1225,7 @@
             const nameEl = document.getElementById('menu-player-name');
             const btnEl = document.getElementById('menu-auth-btn');
             const mmrEl = document.getElementById('menu-mmr');
+            const profileEl = document.getElementById('menu-profile-link');
             if (currentUser) {
                 nameEl.textContent = 'you are ' + currentUser.display_name;
                 btnEl.textContent = 'Sign out';
@@ -861,10 +1233,12 @@
                     mmrEl.textContent = (currentUser.mmr != null ? currentUser.mmr : 1500) + ' MMR';
                     mmrEl.style.display = 'block';
                 }
+                if (profileEl) profileEl.style.display = 'block';
             } else {
                 nameEl.textContent = 'you are ' + (mySessionId || '…');
                 btnEl.textContent = 'Sign in';
                 if (mmrEl) mmrEl.style.display = 'none';
+                if (profileEl) profileEl.style.display = 'none';
             }
         }
 
@@ -1072,85 +1446,73 @@
             }
         });
 
+        // Shared wallet-signing dance, used by both the Sign-In flow
+        // (signInWithEthereum below) and the Profile's Link Wallet flow.
+        // Returns { address, message, signature } on success, or throws
+        // an Error with a user-friendly message. Caller chooses which
+        // /verify endpoint to POST the result to.
+        async function performWalletSignature() {
+            if (!window.ethereum) {
+                throw new Error('No wallet detected.');
+            }
+            const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+            if (!accounts || accounts.length === 0) {
+                throw new Error('No accounts available.');
+            }
+            const address = accounts[0];
+
+            const nonceRes = await fetch(AUTH_WORKER_URL + '/auth/wallet/nonce');
+            const nonceData = await nonceRes.json();
+            if (!nonceData || !nonceData.nonce) {
+                throw new Error('Wallet sign-in unavailable right now.');
+            }
+
+            // EIP-4361 message. Fields exactly match what the server's
+            // parseSiweMessage expects (it needs the address line and
+            // the Nonce: line).
+            const domain = window.location.host;
+            const uri = window.location.origin;
+            const issuedAt = new Date().toISOString();
+            const message =
+                domain + ' wants you to sign in with your Ethereum account:\n' +
+                address + '\n' +
+                '\n' +
+                (nonceData.statement || 'Sign in.') + '\n' +
+                '\n' +
+                'URI: ' + uri + '\n' +
+                'Version: 1\n' +
+                'Chain ID: 1\n' +
+                'Nonce: ' + nonceData.nonce + '\n' +
+                'Issued At: ' + issuedAt;
+
+            let signature;
+            try {
+                signature = await window.ethereum.request({
+                    method: 'personal_sign',
+                    params: [message, address],
+                });
+            } catch (signErr) {
+                if (signErr && (signErr.code === 4001 || signErr.code === 'ACTION_REJECTED')) {
+                    throw new Error('Sign request rejected.');
+                }
+                throw new Error('Wallet failed to sign.');
+            }
+
+            return { address, message, signature };
+        }
+
         // ── Sign In With Ethereum (SIWE / EIP-4361) ───────────────────
         //
         // Implicitly advanced: if the user doesn't have an injected
         // wallet (window.ethereum), we show a short error inline. We
         // don't link them to install one — this is meant for crypto-
         // native users.
-        //
-        // Flow:
-        //   1. Ask the wallet for the connected address.
-        //   2. GET /auth/wallet/nonce — server returns a one-time nonce.
-        //   3. Build the EIP-4361 message and ask the wallet to
-        //      personal_sign it.
-        //   4. POST /auth/wallet/verify { message, signature, address }
-        //      Either we're logged in (token + user) or we get a
-        //      claim_ticket to take into the username-picker step.
-        //   5. If claim_ticket: switch the modal into 'claim' mode and
-        //      let the user pick a display_name (and optional password).
         async function signInWithEthereum() {
-            if (!window.ethereum) {
-                authError.textContent = 'No wallet detected.';
-                return;
-            }
             authError.textContent = '';
             authEthBtn.disabled = true;
             try {
-                // 1. Request accounts. Wallets typically prompt the user
-                //    here if the site hasn't been authorized before.
-                const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-                if (!accounts || accounts.length === 0) {
-                    authError.textContent = 'No accounts available.';
-                    return;
-                }
-                const address = accounts[0];
+                const { address, message, signature } = await performWalletSignature();
 
-                // 2. Get a fresh nonce.
-                const nonceRes = await fetch(AUTH_WORKER_URL + '/auth/wallet/nonce');
-                const nonceData = await nonceRes.json();
-                if (!nonceData || !nonceData.nonce) {
-                    authError.textContent = 'Wallet sign-in unavailable right now.';
-                    return;
-                }
-
-                // 3. Build the EIP-4361 message. Fields exactly match
-                //    what parseSiweMessage on the server expects (it
-                //    needs the address line and the Nonce: line).
-                const domain = window.location.host;
-                const uri = window.location.origin;
-                const issuedAt = new Date().toISOString();
-                const message =
-                    domain + ' wants you to sign in with your Ethereum account:\n' +
-                    address + '\n' +
-                    '\n' +
-                    (nonceData.statement || 'Sign in.') + '\n' +
-                    '\n' +
-                    'URI: ' + uri + '\n' +
-                    'Version: 1\n' +
-                    'Chain ID: 1\n' +
-                    'Nonce: ' + nonceData.nonce + '\n' +
-                    'Issued At: ' + issuedAt;
-
-                // 4. Sign.
-                let signature;
-                try {
-                    signature = await window.ethereum.request({
-                        method: 'personal_sign',
-                        params: [message, address],
-                    });
-                } catch (signErr) {
-                    // 4001 = user rejected. Other codes = wallet issues
-                    // we don't need to interpret deeply.
-                    if (signErr && (signErr.code === 4001 || signErr.code === 'ACTION_REJECTED')) {
-                        authError.textContent = 'Sign request rejected.';
-                    } else {
-                        authError.textContent = 'Wallet failed to sign.';
-                    }
-                    return;
-                }
-
-                // 5. Verify with our server.
                 const verifyRes = await fetch(AUTH_WORKER_URL + '/auth/wallet/verify', {
                     method: 'POST',
                     headers: { 'content-type': 'application/json' },
@@ -1175,8 +1537,9 @@
                     authError.textContent = friendlyWalletError(verifyData);
                 }
             } catch (err) {
-                console.error('Wallet sign-in error:', err);
-                authError.textContent = 'Wallet sign-in failed.';
+                // performWalletSignature throws Error objects with
+                // user-readable messages already; just surface them.
+                authError.textContent = err.message || 'Wallet sign-in failed.';
             } finally {
                 authEthBtn.disabled = false;
             }
@@ -1200,6 +1563,365 @@
         }
 
         authEthBtn.addEventListener('click', signInWithEthereum);
+
+        // ── Profile modal ─────────────────────────────────────────────
+        //
+        // Opens from the menu's "Profile" link (visible only when signed
+        // in). On open: GETs /me/profile + /me/matches?mode=devils,
+        // populates everything. Mode toggle re-fetches /me/matches.
+        // Account section offers "Set/Change password" and "Link wallet"
+        // actions that hit /me/set-password and /me/link-wallet/verify
+        // respectively.
+
+        const profileOverlay = document.getElementById('profile-overlay');
+        const profilePanel = document.getElementById('profile-panel');
+        const profileClose = document.getElementById('profile-close');
+        const menuProfileLink = document.getElementById('menu-profile-link');
+
+        // Header
+        const profileDisplayName = document.getElementById('profile-displayname');
+        const profileMmr = document.getElementById('profile-mmr');
+
+        // Stats
+        const profDevilsGames = document.getElementById('profile-devils-games');
+        const profDevilsWins = document.getElementById('profile-devils-wins');
+        const profDevilsBest = document.getElementById('profile-devils-best');
+        const profAngelsGames = document.getElementById('profile-angels-games');
+        const profAngelsBest = document.getElementById('profile-angels-best');
+
+        // Match history
+        const profileModeBtns = document.querySelectorAll('.profile-mode-btn');
+        const profileMatches = document.getElementById('profile-matches');
+
+        // Account
+        const profilePwStatus = document.getElementById('profile-pw-status');
+        const profilePwBtn = document.getElementById('profile-pw-btn');
+        const profilePwForm = document.getElementById('profile-pw-form');
+        const profilePwCurrent = document.getElementById('profile-pw-current');
+        const profilePwNew = document.getElementById('profile-pw-new');
+        const profilePwError = document.getElementById('profile-pw-error');
+        const profilePwSave = document.getElementById('profile-pw-save');
+        const profilePwCancel = document.getElementById('profile-pw-cancel');
+        const profileWalletStatus = document.getElementById('profile-wallet-status');
+        const profileWalletBtn = document.getElementById('profile-wallet-btn');
+        const profileWalletError = document.getElementById('profile-wallet-error');
+        const profileWalletSuccess = document.getElementById('profile-wallet-success');
+
+        // Tracks whether the user currently has a bespoke identity —
+        // determines whether the password form requires the current
+        // password and whether the action button reads "Set" or
+        // "Change". Refreshed every time we (re-)load profile data.
+        let profileHasPassword = false;
+
+        // Match history mode. Starts at currentMode so opening the
+        // profile matches whichever mode the player is currently in;
+        // toggles independently after that.
+        let profileMatchMode = 'devils';
+
+        function openProfileModal() {
+            if (!currentUser) return;
+            profileOverlay.classList.add('open');
+            // Reset transient UI state.
+            profilePwForm.classList.remove('open');
+            profilePwError.textContent = '';
+            profileWalletError.textContent = '';
+            profileWalletSuccess.textContent = '';
+            profilePwCurrent.value = '';
+            profilePwNew.value = '';
+            // Default mode toggle to whatever the player's playing.
+            profileMatchMode = (currentMode === 'angels') ? 'angels' : 'devils';
+            updateProfileModeButtons();
+            profileMatches.innerHTML = '<div class="profile-empty">Loading…</div>';
+            // Fetch in parallel.
+            loadProfileData();
+            loadProfileMatches();
+        }
+        function closeProfileModal() {
+            profileOverlay.classList.remove('open');
+        }
+
+        profileClose.addEventListener('click', closeProfileModal);
+        profileOverlay.addEventListener('click', (e) => {
+            if (e.target === profileOverlay) closeProfileModal();
+        });
+        // Don't let pointer events on the panel reach the Phaser canvas.
+        profilePanel.addEventListener('pointerdown', e => e.stopPropagation());
+        profilePanel.addEventListener('touchstart', e => e.stopPropagation(), { passive: false });
+        // Esc closes — but only if no other modal is open ahead of us.
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && profileOverlay.classList.contains('open')) {
+                // The auth overlay has its own Esc handler; if it's also
+                // open, let it handle. Otherwise close us.
+                if (!authOverlay.classList.contains('open')) {
+                    closeProfileModal();
+                }
+            }
+        });
+
+        menuProfileLink.addEventListener('click', openProfileModal);
+
+        function updateProfileModeButtons() {
+            profileModeBtns.forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.mode === profileMatchMode);
+            });
+        }
+        profileModeBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (profileMatchMode === btn.dataset.mode) return;
+                profileMatchMode = btn.dataset.mode;
+                updateProfileModeButtons();
+                profileMatches.innerHTML = '<div class="profile-empty">Loading…</div>';
+                loadProfileMatches();
+            });
+        });
+
+        // GET /me/profile with the stored JWT. Populates the header,
+        // stats grid, and account section. Also refreshes currentUser
+        // (in case mmr changed since last sign-in) and the menu.
+        async function loadProfileData() {
+            const token = getStoredToken();
+            if (!token) return;
+            try {
+                const res = await fetch(AUTH_WORKER_URL + '/me/profile', {
+                    headers: { authorization: 'Bearer ' + token },
+                });
+                if (!res.ok) {
+                    // 401 means our token's no good. Sign out locally so
+                    // the user can re-authenticate.
+                    if (res.status === 401) {
+                        setStoredToken(null);
+                        currentUser = null;
+                        updateMenuFromAuth();
+                        closeProfileModal();
+                    }
+                    return;
+                }
+                const data = await res.json();
+
+                profileDisplayName.textContent = data.user.display_name;
+                profileMmr.textContent = (data.user.mmr != null ? data.user.mmr : 1500) + ' MMR';
+
+                profDevilsGames.textContent = data.stats.devils.games;
+                profDevilsWins.textContent = data.stats.devils.wins;
+                profDevilsBest.textContent = data.stats.devils.best_score != null
+                    ? data.stats.devils.best_score : '–';
+                profAngelsGames.textContent = data.stats.angels.games;
+                profAngelsBest.textContent = data.stats.angels.best_score != null
+                    ? data.stats.angels.best_score : '–';
+
+                profileHasPassword = !!data.has_password;
+                profilePwStatus.textContent = profileHasPassword ? 'Set' : 'No password';
+                profilePwBtn.textContent = profileHasPassword ? 'Change' : 'Set';
+
+                if (data.wallet_address) {
+                    // Show a short form of the address (first 6 + last 4)
+                    // — full address is too long for the row. Title
+                    // tooltip shows the full thing for inspection.
+                    const a = data.wallet_address;
+                    const short = a.slice(0, 6) + '…' + a.slice(-4);
+                    profileWalletStatus.textContent = short;
+                    profileWalletStatus.title = a;
+                    profileWalletBtn.style.display = 'none';
+                } else {
+                    profileWalletStatus.textContent = 'Not linked';
+                    profileWalletStatus.title = '';
+                    profileWalletBtn.style.display = '';
+                }
+
+                // Keep menu MMR in sync if it changed (e.g. just earned
+                // a Devils win and reopened the profile).
+                if (currentUser) {
+                    currentUser.mmr = data.user.mmr;
+                    updateMenuFromAuth();
+                }
+            } catch (_) {
+                // Network blip — leave whatever placeholder text was
+                // already shown. The user can close and reopen.
+            }
+        }
+
+        async function loadProfileMatches() {
+            const token = getStoredToken();
+            if (!token) return;
+            try {
+                const res = await fetch(
+                    AUTH_WORKER_URL + '/me/matches?mode=' + profileMatchMode + '&limit=20',
+                    { headers: { authorization: 'Bearer ' + token } },
+                );
+                if (!res.ok) {
+                    profileMatches.innerHTML =
+                        '<div class="profile-empty">Couldn\'t load matches.</div>';
+                    return;
+                }
+                const data = await res.json();
+                renderProfileMatches(data.matches || [], data.mode);
+            } catch (_) {
+                profileMatches.innerHTML =
+                    '<div class="profile-empty">Couldn\'t load matches.</div>';
+            }
+        }
+
+        function renderProfileMatches(matches, mode) {
+            if (!matches.length) {
+                profileMatches.innerHTML =
+                    '<div class="profile-empty">No matches yet.</div>';
+                return;
+            }
+            const frag = document.createDocumentFragment();
+            for (const m of matches) {
+                const row = document.createElement('div');
+                row.className = 'profile-match-row';
+
+                const date = document.createElement('span');
+                date.className = 'profile-match-date';
+                // Date.toISOString lops the time off cleanly; ended_at
+                // is ms since epoch from the server.
+                const d = new Date(m.ended_at);
+                date.textContent = d.toISOString().slice(0, 10);
+                row.appendChild(date);
+
+                const rank = document.createElement('span');
+                rank.className = 'profile-match-rank';
+                // Devils: show finishing rank (1st, 2nd, …). Angels is
+                // co-op so finishing_rank is meaningless — show "—".
+                if (mode === 'devils' && m.finishing_rank != null) {
+                    rank.textContent = ordinal(m.finishing_rank);
+                } else {
+                    rank.textContent = '—';
+                }
+                row.appendChild(rank);
+
+                const score = document.createElement('span');
+                score.className = 'profile-match-score';
+                score.textContent = m.final_score != null ? m.final_score : '–';
+                row.appendChild(score);
+
+                frag.appendChild(row);
+            }
+            profileMatches.innerHTML = '';
+            profileMatches.appendChild(frag);
+        }
+
+        // 1 → "1st", 2 → "2nd", 3 → "3rd", 4 → "4th", etc.
+        function ordinal(n) {
+            const s = ['th', 'st', 'nd', 'rd'];
+            const v = n % 100;
+            return n + (s[(v - 20) % 10] || s[v] || s[0]);
+        }
+
+        // ── Set / change password ─────────────────────────────────────
+        profilePwBtn.addEventListener('click', () => {
+            profilePwError.textContent = '';
+            profilePwCurrent.value = '';
+            profilePwNew.value = '';
+            // Hide the current-password field if the user doesn't have
+            // one yet (wallet-only account adding a password for the
+            // first time).
+            profilePwCurrent.style.display = profileHasPassword ? '' : 'none';
+            profilePwForm.classList.add('open');
+            setTimeout(() => {
+                if (profileHasPassword) profilePwCurrent.focus();
+                else profilePwNew.focus();
+            }, 0);
+        });
+        profilePwCancel.addEventListener('click', () => {
+            profilePwForm.classList.remove('open');
+            profilePwError.textContent = '';
+        });
+        async function submitProfilePassword() {
+            profilePwError.textContent = '';
+            const newPw = profilePwNew.value;
+            if (!newPw) {
+                profilePwError.textContent = 'New password required.';
+                return;
+            }
+            const body = { new_password: newPw };
+            if (profileHasPassword) {
+                if (!profilePwCurrent.value) {
+                    profilePwError.textContent = 'Current password required.';
+                    return;
+                }
+                body.current_password = profilePwCurrent.value;
+            }
+            profilePwSave.disabled = true;
+            try {
+                const token = getStoredToken();
+                const res = await fetch(AUTH_WORKER_URL + '/me/set-password', {
+                    method: 'POST',
+                    headers: {
+                        'content-type': 'application/json',
+                        'authorization': 'Bearer ' + token,
+                    },
+                    body: JSON.stringify(body),
+                });
+                const data = await res.json();
+                if (res.ok && data.ok) {
+                    profilePwForm.classList.remove('open');
+                    profilePwCurrent.value = '';
+                    profilePwNew.value = '';
+                    // Update local state — they now have a password.
+                    profileHasPassword = true;
+                    profilePwStatus.textContent = 'Set';
+                    profilePwBtn.textContent = 'Change';
+                } else {
+                    profilePwError.textContent = friendlyAuthError(data);
+                }
+            } catch (_) {
+                profilePwError.textContent = 'Network error.';
+            } finally {
+                profilePwSave.disabled = false;
+            }
+        }
+        profilePwSave.addEventListener('click', submitProfilePassword);
+        [profilePwCurrent, profilePwNew].forEach(el => {
+            el.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') submitProfilePassword();
+            });
+        });
+
+        // ── Link wallet ──────────────────────────────────────────────
+        profileWalletBtn.addEventListener('click', async () => {
+            profileWalletError.textContent = '';
+            profileWalletSuccess.textContent = '';
+            profileWalletBtn.disabled = true;
+            try {
+                const { address, message, signature } = await performWalletSignature();
+                const token = getStoredToken();
+                const res = await fetch(AUTH_WORKER_URL + '/me/link-wallet/verify', {
+                    method: 'POST',
+                    headers: {
+                        'content-type': 'application/json',
+                        'authorization': 'Bearer ' + token,
+                    },
+                    body: JSON.stringify({ message, signature, address }),
+                });
+                const data = await res.json();
+                if (res.ok && data.ok) {
+                    profileWalletSuccess.textContent = 'Wallet linked.';
+                    // Refresh the profile so the wallet row updates to
+                    // show the address and hides the Link button.
+                    loadProfileData();
+                } else {
+                    profileWalletError.textContent = friendlyLinkWalletError(data);
+                }
+            } catch (err) {
+                profileWalletError.textContent = err.message || 'Wallet linking failed.';
+            } finally {
+                profileWalletBtn.disabled = false;
+            }
+        });
+        function friendlyLinkWalletError(result) {
+            if (!result) return 'Wallet linking failed.';
+            switch (result.error) {
+                case 'already_linked_to_you': return 'That wallet is already linked to your account.';
+                case 'address_linked_elsewhere': return 'That wallet is linked to another account.';
+                case 'nonce_invalid_or_expired': return 'Signing took too long. Please try again.';
+                case 'invalid_signature':
+                case 'signature_mismatch':
+                case 'address_mismatch': return 'Signature didn\'t verify.';
+                default: return friendlyWalletError(result);
+            }
+        }
 
         // ── Leaderboard ───────────────────────────────────────────────
         const leaderboardOverlay = document.getElementById('leaderboard-overlay');

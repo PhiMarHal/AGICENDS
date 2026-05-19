@@ -2,10 +2,11 @@
 //
 // Sections (Ctrl+F the §SECTION markers):
 //   §JWT                — HS256 sign/verify, no external dependency
-//   §SESSIONS           — issueSession, handleVerify, handleLogout
+//   §SESSIONS           — issueSession, handleVerify, handleLogout, requireAuth
 //   §BESPOKE            — signupBespoke, signinBespoke
 //   §IDENTITY-HELPERS   — shared user-lookup helpers across providers
 //   §ETHEREUM           — Sign In With Ethereum (EIP-4361 / SIWE)
+//   §PROFILE            — /me/profile, /me/matches, /me/set-password, /me/link-wallet/verify
 //
 // All provider handlers funnel through `issueSession(env, user)` to mint a
 // JWT, so the session shape is consistent regardless of how the user
@@ -13,7 +14,7 @@
 // pointing at it — a single account can be reached via bespoke
 // username/password AND via Ethereum signature, attached over time.
 
-import { json, safeJson, one, run } from './index.js';
+import { json, safeJson, one, all, run } from './index.js';
 
 // ═══════════════════════════════════════════════════════════════════════
 // §JWT — minimal HS256 JSON Web Tokens
@@ -168,6 +169,36 @@ export async function handleVerify(request, env) {
 //   a token-blocklist KV write here.)
 export async function handleLogout(_request, _env) {
     return json({ ok: true });
+}
+
+// Bearer-token check used by every /me/* endpoint. Returns either
+// { user } when authenticated or { response } holding a 401 the caller
+// should return directly. Caller code looks like:
+//
+//   const auth = await requireAuth(request, env);
+//   if (auth.response) return auth.response;
+//   const user = auth.user;
+//
+// Token comes from `Authorization: Bearer <jwt>`. Anything else — no
+// header, wrong scheme, malformed token, expired — returns 401 here.
+async function requireAuth(request, env) {
+    const header = request.headers.get('authorization') || '';
+    const m = /^Bearer\s+(.+)$/i.exec(header);
+    if (!m) {
+        return { response: json({ error: 'missing_token' }, 401) };
+    }
+    const payload = await jwtVerify(m[1], env.JWT_SECRET);
+    if (!payload) {
+        return { response: json({ error: 'invalid_or_expired' }, 401) };
+    }
+    const user = await one(env,
+        'SELECT id, display_name, status, mmr FROM users WHERE id = ?',
+        payload.sub,
+    );
+    if (!user || user.status !== 'active') {
+        return { response: json({ error: 'user_unavailable' }, 401) };
+    }
+    return { user };
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -557,52 +588,60 @@ export async function walletNonce(_request, env) {
 //   → 200 { token, user }                  (existing identity → logged in)
 //   → 200 { claim_ticket: "..." }          (new identity → pick username)
 //   → 4xx { error }
-export async function walletVerify(request, env) {
-    const body = await safeJson(request);
+// Run the EIP-4361 signature-verification pipeline used by both
+// /auth/wallet/verify (new-or-existing user) and /me/link-wallet/verify
+// (logged-in user linking a wallet to their account). Returns either
+// { address } with the verified lowercased address, or { error } with a
+// machine-readable code. Consumes the nonce on first call — a second
+// submission with the same nonce is rejected as expired.
+async function verifySiweSubmission(env, body) {
     if (!body
         || typeof body.message !== 'string'
         || typeof body.signature !== 'string'
         || typeof body.address !== 'string') {
-        return json({ error: 'invalid_request' }, 400);
+        return { error: 'invalid_request' };
     }
 
     const claimedAddress = body.address.toLowerCase();
     if (!/^0x[a-f0-9]{40}$/.test(claimedAddress)) {
-        return json({ error: 'invalid_address' }, 400);
+        return { error: 'invalid_address' };
     }
 
     const { addr: msgAddr, nonce } = parseSiweMessage(body.message);
-    if (!msgAddr || !nonce) {
-        return json({ error: 'malformed_message' }, 400);
-    }
-    if (msgAddr !== claimedAddress) {
-        return json({ error: 'address_mismatch' }, 400);
-    }
+    if (!msgAddr || !nonce) return { error: 'malformed_message' };
+    if (msgAddr !== claimedAddress) return { error: 'address_mismatch' };
 
-    // Single-use nonce check. Delete unconditionally on first read so a
+    // Single-use nonce. Delete unconditionally on first read so a
     // captured signature can't be re-submitted.
     const nonceKey = 'siwe_nonce:' + nonce;
     const stored = await env.AUTH_KV.get(nonceKey);
-    if (!stored) {
-        return json({ error: 'nonce_invalid_or_expired' }, 400);
-    }
+    if (!stored) return { error: 'nonce_invalid_or_expired' };
     await env.AUTH_KV.delete(nonceKey);
 
-    // Verify the signature actually came from `claimedAddress`.
+    // Recover the signing address and compare.
     let recovered;
     try {
         const hash = eip191Hash(body.message);
         recovered = recoverAddress(hash, body.signature);
     } catch (err) {
         console.error('SIWE signature recovery failed:', err);
-        return json({ error: 'invalid_signature' }, 400);
+        return { error: 'invalid_signature' };
     }
     if (recovered.toLowerCase() !== claimedAddress) {
-        return json({ error: 'signature_mismatch' }, 400);
+        return { error: 'signature_mismatch' };
     }
 
+    return { address: claimedAddress };
+}
+
+export async function walletVerify(request, env) {
+    const body = await safeJson(request);
+    const result = await verifySiweSubmission(env, body);
+    if (result.error) return json({ error: result.error }, 400);
+    const address = result.address;
+
     // Existing identity? Log in.
-    const existing = await findIdentityUser(env, 'ethereum', claimedAddress);
+    const existing = await findIdentityUser(env, 'ethereum', address);
     if (existing) {
         if (existing.status !== 'active') {
             return json({ error: 'account_disabled' }, 401);
@@ -616,7 +655,7 @@ export async function walletVerify(request, env) {
     const ticket = randomToken();
     await env.AUTH_KV.put(
         'siwe_claim:' + ticket,
-        JSON.stringify({ address: claimedAddress, created_at: Date.now() }),
+        JSON.stringify({ address, created_at: Date.now() }),
         { expirationTtl: SIWE_CLAIM_TTL_SEC },
     );
     return json({ claim_ticket: ticket });
@@ -729,4 +768,205 @@ export async function walletClaim(request, env) {
     const user = { id: userId, display_name: username, status: 'active', mmr: 1500 };
     const token = await issueSession(env, user);
     return json({ token, user });
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// §PROFILE — /me/* endpoints for the logged-in user
+// ═══════════════════════════════════════════════════════════════════════
+//
+// All four take an `Authorization: Bearer <jwt>` header (enforced by
+// requireAuth). They operate on the JWT subject, never on a user_id
+// taken from the URL — keeps these endpoints uniformly "act as me",
+// can't be abused to read or mutate someone else's account.
+//
+//   GET  /me/profile
+//     → { user: {id, display_name, mmr},
+//         has_password: bool,
+//         wallet_address: "0x..." | null,
+//         stats: { devils: {games, wins, best_score}, angels: {games, best_score} } }
+//
+//   GET  /me/matches?mode=devils|angels&limit=20
+//     → { mode, matches: [ {match_id, ended_at, final_score, finishing_rank}, ... ] }
+//
+//   POST /me/set-password    { current_password?, new_password }
+//     If user already has a bespoke identity, `current_password` is
+//     required and must match. If they don't (wallet-only account),
+//     this attaches a brand-new bespoke identity using their
+//     lowercased display_name as the external_id.
+//
+//   POST /me/link-wallet/verify   { message, signature, address }
+//     Runs the same SIWE-signature dance as /auth/wallet/verify, but
+//     instead of finding-or-creating a user, attaches the verified
+//     address to the current logged-in user. Errors if the wallet is
+//     already linked to a different account.
+
+export async function meProfile(request, env) {
+    const a = await requireAuth(request, env);
+    if (a.response) return a.response;
+    const user = a.user;
+
+    // Which login methods does this user have? We only need the
+    // identifying bit per provider: for bespoke, presence-or-absence
+    // is the answer; for ethereum, we surface the address itself.
+    const identities = await all(env,
+        'SELECT provider, external_id FROM auth_identities WHERE user_id = ?',
+        user.id,
+    );
+    const hasBespoke = identities.some(i => i.provider === 'bespoke');
+    const ethRow = identities.find(i => i.provider === 'ethereum');
+
+    // Per-mode stats. One round trip with a GROUP BY. The CASE-inside-
+    // SUM idiom is only meaningful for Devils (Angels doesn't rank
+    // players), but it harmlessly returns 0 for Angels rows.
+    const statRows = await all(env,
+        `SELECT
+             m.mode                                              AS mode,
+             COUNT(*)                                            AS games,
+             COALESCE(SUM(CASE WHEN mp.finishing_rank = 1 THEN 1 ELSE 0 END), 0) AS wins,
+             MAX(mp.final_score)                                 AS best_score
+         FROM match_players mp
+         JOIN matches m ON m.id = mp.match_id
+         WHERE mp.user_id = ?
+         GROUP BY m.mode`,
+        user.id,
+    );
+    const stats = {
+        devils: { games: 0, wins: 0, best_score: null },
+        angels: { games: 0, best_score: null },
+    };
+    for (const r of statRows) {
+        if (r.mode === 'devils') {
+            stats.devils = { games: r.games, wins: r.wins, best_score: r.best_score };
+        } else if (r.mode === 'angels') {
+            // wins doesn't apply to Angels (it's co-op), so we omit it.
+            stats.angels = { games: r.games, best_score: r.best_score };
+        }
+    }
+
+    return json({
+        user: { id: user.id, display_name: user.display_name, mmr: user.mmr },
+        has_password: hasBespoke,
+        wallet_address: ethRow ? ethRow.external_id : null,
+        stats,
+    });
+}
+
+export async function meMatches(request, env) {
+    const a = await requireAuth(request, env);
+    if (a.response) return a.response;
+    const user = a.user;
+
+    const url = new URL(request.url);
+    const mode = url.searchParams.get('mode') === 'angels' ? 'angels' : 'devils';
+    let limit = Number.parseInt(url.searchParams.get('limit'), 10);
+    if (!Number.isInteger(limit) || limit <= 0) limit = 20;
+    limit = Math.min(limit, 50);
+
+    const matches = await all(env,
+        `SELECT m.id AS match_id, m.ended_at,
+                mp.final_score, mp.finishing_rank
+         FROM match_players mp
+         JOIN matches m ON m.id = mp.match_id
+         WHERE mp.user_id = ? AND m.mode = ?
+         ORDER BY m.ended_at DESC
+         LIMIT ?`,
+        user.id, mode, limit,
+    );
+
+    return json({ mode, matches });
+}
+
+export async function meSetPassword(request, env) {
+    const a = await requireAuth(request, env);
+    if (a.response) return a.response;
+    const user = a.user;
+
+    const body = await safeJson(request);
+    if (!body) return json({ error: 'invalid_request' }, 400);
+
+    const newPassword = body.new_password;
+    if (typeof newPassword !== 'string'
+        || newPassword.length < MIN_PASSWORD_LEN
+        || newPassword.length > MAX_PASSWORD_LEN) {
+        return json({
+            error: 'invalid_password',
+            message: `Password must be ${MIN_PASSWORD_LEN}–${MAX_PASSWORD_LEN} characters.`,
+        }, 400);
+    }
+
+    // Does this user already have a bespoke identity? Determines
+    // whether we UPDATE an existing credential or INSERT a new row.
+    const existing = await one(env,
+        'SELECT id, credential FROM auth_identities WHERE user_id = ? AND provider = ?',
+        user.id, 'bespoke',
+    );
+
+    if (existing) {
+        // Changing a password — require the current one to prove the
+        // session token wasn't lifted off a logged-in device.
+        if (typeof body.current_password !== 'string' || body.current_password.length === 0) {
+            return json({ error: 'current_password_required' }, 400);
+        }
+        const ok = await verifyPassword(body.current_password, existing.credential);
+        if (!ok) {
+            return json({ error: 'invalid_credentials' }, 401);
+        }
+        const hashed = await hashPassword(newPassword);
+        await run(env,
+            'UPDATE auth_identities SET credential = ? WHERE id = ?',
+            hashed, existing.id,
+        );
+        return json({ ok: true, action: 'changed' });
+    }
+
+    // Wallet-only account adding a password for the first time. The
+    // bespoke external_id is the lowercased display_name — which is
+    // guaranteed unique by users.display_name's UNIQUE NOCASE index,
+    // so the INSERT below won't collide unless something has gone
+    // catastrophically wrong.
+    const bespokeExternalId = user.display_name.toLowerCase();
+    const hashed = await hashPassword(newPassword);
+    try {
+        await run(env,
+            'INSERT INTO auth_identities(user_id, provider, external_id, credential, created_at) VALUES(?, ?, ?, ?, ?)',
+            user.id, 'bespoke', bespokeExternalId, hashed, Date.now(),
+        );
+    } catch (err) {
+        if (String(err).includes('UNIQUE')) {
+            // Means another bespoke identity already owns this
+            // username — shouldn't be possible given the display_name
+            // uniqueness invariant, but cover the case defensively.
+            return json({ error: 'username_taken' }, 409);
+        }
+        throw err;
+    }
+    return json({ ok: true, action: 'added' });
+}
+
+export async function meLinkWalletVerify(request, env) {
+    const a = await requireAuth(request, env);
+    if (a.response) return a.response;
+    const user = a.user;
+
+    const body = await safeJson(request);
+    const result = await verifySiweSubmission(env, body);
+    if (result.error) return json({ error: result.error }, 400);
+    const address = result.address;
+
+    // The wallet must not already be linked to anyone. If it's linked
+    // to *this* user we surface a distinct error so the client can
+    // give a clearer message.
+    const existing = await findIdentityUser(env, 'ethereum', address);
+    if (existing) {
+        if (existing.id === user.id) {
+            return json({ error: 'already_linked_to_you' }, 409);
+        }
+        return json({ error: 'address_linked_elsewhere' }, 409);
+    }
+
+    await run(env,
+        'INSERT INTO auth_identities(user_id, provider, external_id, credential, created_at) VALUES(?, ?, ?, ?, ?)',
+        user.id, 'ethereum', address, null, Date.now(),
+    );
+    return json({ ok: true, address });
 }

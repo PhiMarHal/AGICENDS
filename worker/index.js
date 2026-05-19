@@ -218,6 +218,14 @@ router.get('/auth/wallet/nonce', auth.walletNonce);
 router.post('/auth/wallet/verify', auth.walletVerify);
 router.post('/auth/wallet/claim', auth.walletClaim);
 
+// /me/* — profile & account-management endpoints for the logged-in user.
+// Every one of these requires `Authorization: Bearer <jwt>`; the JWT's
+// subject is the only thing they trust (URL never carries a user_id).
+router.get('/me/profile', auth.meProfile);
+router.get('/me/matches', auth.meMatches);
+router.post('/me/set-password', auth.meSetPassword);
+router.post('/me/link-wallet/verify', auth.meLinkWalletVerify);
+
 // Stats — server-to-server write, public reads.
 router.post('/stats/record', stats.recordMatch);
 router.get('/stats/user/:id', stats.getUserStats);
