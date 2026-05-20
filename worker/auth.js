@@ -919,7 +919,7 @@ export async function meSetPassword(request, env) {
         if (!otherAuth) {
             return json({
                 error: 'no_other_auth_method',
-                message: 'Link a wallet first — otherwise removing your password would lock you out of this account.',
+                message: 'To remove password, link a wallet first.',
             }, 400);
         }
 
