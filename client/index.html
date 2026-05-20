@@ -646,9 +646,23 @@
 
         .profile-match-row {
             display: flex;
-            padding: 2px 0;
+            padding: 2px 6px;
+            margin: 0 -6px;
+            /* extend the row's hit area to the box's padding */
             white-space: nowrap;
             font-size: 12px;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+
+        /* Subtle zebra striping matches the DEVILS/ANGELS stat boxes
+           above — makes scanning a tall list of matches easier. */
+        .profile-match-row:nth-child(even) {
+            background: #111;
+        }
+
+        .profile-match-row:hover {
+            background: #222;
         }
 
         .profile-match-date {
@@ -669,40 +683,147 @@
             flex-shrink: 0;
         }
 
-        /* Devils row layout:
-             [date 130px][...empty space...][rank][score]
-           margin-left: auto on the rank consumes the slack between
-           date and rank+score, pushing rank+score against the right
-           edge. Result: rank sits just left of score with a small
-           gap, both on the right. */
-        .profile-match-row.devils .profile-match-date {
+        /* Both modes now have a rank column:
+             Devils: personal finishing rank (1st, 2nd, …)
+             Angels: global team-score rank (#1, #2, …)
+           Same column layout for both — only the text format differs. */
+        .profile-match-row .profile-match-date {
             width: 130px;
         }
 
-        .profile-match-row.devils .profile-match-rank {
-            width: 48px;
+        .profile-match-row .profile-match-rank {
+            width: 56px;
             margin-left: auto;
         }
 
-        .profile-match-row.devils .profile-match-score {
+        .profile-match-row .profile-match-score {
             width: 60px;
-        }
-
-        /* Angels row layout: no rank column (Angels is co-op). Score
-           pushed right by the same auto-margin trick.
-             [date 130px][...empty...][score] */
-        .profile-match-row.angels .profile-match-date {
-            width: 130px;
-        }
-
-        .profile-match-row.angels .profile-match-score {
-            width: 60px;
-            margin-left: auto;
         }
 
         .profile-empty {
             color: #888;
             padding: 6px 0;
+            font-size: 12px;
+        }
+
+        /* ── Match detail modal ───────────────────────────────────────
+           Opened by clicking a row in the Recent matches list. Shows
+           the player's rank + score big at the top, then a separator,
+           then mode-specific content (rankings list for Devils, name
+           list for Angels), separator, timestamp. Sits at z 30 above
+           the Profile modal. */
+        #match-detail-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 30;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #match-detail-overlay.open {
+            display: flex;
+        }
+
+        #match-detail-panel {
+            position: relative;
+            background: rgba(0, 0, 0, 0.95);
+            color: #fff;
+            font-family: monospace;
+            font-size: 13px;
+            padding: 16px 22px;
+            border-radius: 6px;
+            width: 360px;
+            max-width: 90vw;
+            box-sizing: border-box;
+        }
+
+        #match-detail-close {
+            position: absolute;
+            top: 6px;
+            right: 12px;
+            color: #888;
+            cursor: pointer;
+            font-size: 22px;
+            line-height: 1;
+        }
+
+        #match-detail-close:hover {
+            color: #fff;
+        }
+
+        #match-detail-rank {
+            text-align: center;
+            font-size: 32px;
+            color: #ffd54f;
+            margin: 16px 0 4px 0;
+            font-weight: bold;
+            letter-spacing: 1px;
+        }
+
+        #match-detail-score {
+            text-align: center;
+            font-size: 20px;
+            color: #fff;
+            margin: 0 0 14px 0;
+        }
+
+        .match-detail-sep {
+            border-top: 1px solid #333;
+            margin: 12px 0;
+        }
+
+        #match-detail-body {
+            min-height: 40px;
+        }
+
+        .match-detail-row {
+            display: flex;
+            padding: 3px 0;
+            font-size: 13px;
+        }
+
+        .match-detail-row .name {
+            flex: 1;
+            color: #ccc;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .match-detail-row .score {
+            color: #fff;
+            padding-left: 10px;
+        }
+
+        /* The current user's row gets a subtle highlight — easy to find
+           yourself in a long ranking list. */
+        .match-detail-row.me .name {
+            color: #ffd54f;
+            font-weight: bold;
+        }
+
+        .match-detail-row.me .score {
+            color: #ffd54f;
+            font-weight: bold;
+        }
+
+        #match-detail-angels-names {
+            text-align: center;
+            color: #ccc;
+            line-height: 1.5;
+            padding: 4px 0;
+            word-break: break-word;
+        }
+
+        #match-detail-angels-names .me {
+            color: #ffd54f;
+            font-weight: bold;
+        }
+
+        #match-detail-time {
+            text-align: center;
+            color: #888;
             font-size: 12px;
         }
 
@@ -1129,6 +1250,24 @@
             </div>
             <div class="profile-error" id="profile-wallet-error"></div>
             <div class="profile-success" id="profile-wallet-success"></div>
+        </div>
+    </div>
+
+    <!-- Match detail modal — opened by clicking a row in the Profile's
+         Recent matches list. -->
+    <div id="match-detail-overlay">
+        <div id="match-detail-panel">
+            <div id="match-detail-close" title="Close">×</div>
+            <div id="match-detail-rank">…</div>
+            <div id="match-detail-score">…</div>
+            <div class="match-detail-sep"></div>
+            <div id="match-detail-body">
+                <!-- Filled by openMatchDetailModal — either a list of
+                     .match-detail-row entries (Devils) or a
+                     #match-detail-angels-names line (Angels). -->
+            </div>
+            <div class="match-detail-sep"></div>
+            <div id="match-detail-time">…</div>
         </div>
     </div>
 
@@ -1854,7 +1993,7 @@
         profilePanel.addEventListener('touchstart', e => e.stopPropagation(), { passive: false });
         // Esc closes — but only if no other modal is open ahead of us.
         // Stacking order (closes outermost first):
-        //   confirm > password > profile
+        //   confirm > password / match-detail > profile
         document.addEventListener('keydown', (e) => {
             if (e.key !== 'Escape') return;
             if (!profileOverlay.classList.contains('open')) return;
@@ -1863,6 +2002,7 @@
             if (authOverlay.classList.contains('open')) return;
             if (confirmOverlay.classList.contains('open')) return;
             if (profilePwOverlay.classList.contains('open')) return;
+            if (matchDetailOverlay.classList.contains('open')) return;
             closeProfileModal();
         });
         // Password modal's own Esc handler — defers to the confirm
@@ -2057,29 +2197,32 @@
             const frag = document.createDocumentFragment();
             for (const m of matches) {
                 const row = document.createElement('div');
-                // mode class drives the column layout (Devils has a
-                // rank column; Angels doesn't).
+                // mode class on the row preserves semantics for the
+                // click handler (Devils vs Angels detail rendering).
                 row.className = 'profile-match-row ' + mode;
+                row.dataset.matchId = m.match_id;
+                row.dataset.mode = mode;
 
                 const date = document.createElement('span');
                 date.className = 'profile-match-date';
-                // Local-time YYYY-MM-DD HH:MM. Using ISO bits in UTC
-                // would be technically simpler but confusing for any
-                // user not in the UTC zone; local feels right for a
-                // personal match-history view.
                 date.textContent = formatMatchTimestamp(m.ended_at);
                 row.appendChild(date);
 
-                // Devils only: finishing-rank column. Angels is co-op,
-                // so rank is meaningless — we just omit the span.
+                // Both modes get a rank cell now. Format differs:
+                //   Devils: finishing_rank as ordinal (1st, 2nd, …)
+                //   Angels: global_rank with # prefix (#1, #2, …)
+                const rank = document.createElement('span');
+                rank.className = 'profile-match-rank';
                 if (mode === 'devils') {
-                    const rank = document.createElement('span');
-                    rank.className = 'profile-match-rank';
                     rank.textContent = m.finishing_rank != null
                         ? ordinal(m.finishing_rank)
                         : '—';
-                    row.appendChild(rank);
+                } else {
+                    rank.textContent = m.global_rank != null
+                        ? '#' + m.global_rank
+                        : '—';
                 }
+                row.appendChild(rank);
 
                 const score = document.createElement('span');
                 score.className = 'profile-match-score';
@@ -2108,7 +2251,147 @@
             return n + (s[(v - 20) % 10] || s[v] || s[0]);
         }
 
-        // ── Set / change password ─────────────────────────────────────
+        // ── Match detail modal ────────────────────────────────────────
+        //
+        // Opened by clicking any row in the Recent matches list. The
+        // server returns the full participant list (+ Angels global
+        // rank). We render it differently per mode:
+        //
+        //   Devils: big finishing-rank, big score, full ranking list
+        //           with names left-aligned and scores right-aligned.
+        //   Angels: big global rank (#N), big team score, all
+        //           participant names joined by " - " on one line.
+        //
+        // Both end with the match timestamp.
+
+        const matchDetailOverlay = document.getElementById('match-detail-overlay');
+        const matchDetailPanel = document.getElementById('match-detail-panel');
+        const matchDetailClose = document.getElementById('match-detail-close');
+        const matchDetailRankEl = document.getElementById('match-detail-rank');
+        const matchDetailScoreEl = document.getElementById('match-detail-score');
+        const matchDetailBody = document.getElementById('match-detail-body');
+        const matchDetailTimeEl = document.getElementById('match-detail-time');
+
+        // Click-delegation on the matches container — one listener
+        // serves all rows, present and future. dataset.matchId/.mode
+        // are set when the row is rendered.
+        profileMatches.addEventListener('click', (e) => {
+            const row = e.target.closest('.profile-match-row');
+            if (!row || !row.dataset.matchId) return;
+            openMatchDetailModal(row.dataset.matchId);
+        });
+
+        async function openMatchDetailModal(matchId) {
+            // Reset to placeholders so a slow fetch doesn't reveal
+            // last-opened-match content.
+            matchDetailRankEl.textContent = '…';
+            matchDetailScoreEl.textContent = '…';
+            matchDetailBody.innerHTML = '<div class="profile-empty" style="text-align:center">Loading…</div>';
+            matchDetailTimeEl.textContent = '';
+            matchDetailOverlay.classList.add('open');
+
+            const token = getStoredToken();
+            try {
+                const res = await fetch(AUTH_WORKER_URL + '/me/match/' + encodeURIComponent(matchId), {
+                    headers: { authorization: 'Bearer ' + token },
+                });
+                if (!res.ok) {
+                    matchDetailBody.innerHTML =
+                        '<div class="profile-empty" style="text-align:center">Couldn\'t load match.</div>';
+                    return;
+                }
+                const data = await res.json();
+                renderMatchDetail(data);
+            } catch (_) {
+                matchDetailBody.innerHTML =
+                    '<div class="profile-empty" style="text-align:center">Couldn\'t load match.</div>';
+            }
+        }
+
+        function closeMatchDetailModal() {
+            matchDetailOverlay.classList.remove('open');
+        }
+
+        function renderMatchDetail(data) {
+            // Header: rank + score, displayed differently per mode.
+            if (data.mode === 'devils') {
+                matchDetailRankEl.textContent = data.my_finishing_rank != null
+                    ? ordinal(data.my_finishing_rank)
+                    : '—';
+                matchDetailScoreEl.textContent = (data.my_final_score != null
+                    ? data.my_final_score
+                    : '–') + ' pts';
+            } else {
+                matchDetailRankEl.textContent = data.global_rank != null
+                    ? '#' + data.global_rank
+                    : '—';
+                matchDetailScoreEl.textContent = (data.team_score != null
+                    ? data.team_score
+                    : '–') + ' pts';
+            }
+
+            // Body content varies by mode.
+            matchDetailBody.innerHTML = '';
+            const myName = currentUser ? currentUser.display_name : null;
+
+            if (data.mode === 'devils') {
+                // Ranked list of players. Server already orders by
+                // finishing_rank ASC.
+                for (const p of (data.players || [])) {
+                    const row = document.createElement('div');
+                    row.className = 'match-detail-row';
+                    if (p.display_name === myName) row.classList.add('me');
+
+                    const name = document.createElement('span');
+                    name.className = 'name';
+                    const rankPrefix = p.finishing_rank != null ? '#' + p.finishing_rank + ' ' : '';
+                    name.textContent = rankPrefix + p.display_name;
+                    row.appendChild(name);
+
+                    const score = document.createElement('span');
+                    score.className = 'score';
+                    score.textContent = p.final_score != null ? p.final_score : '–';
+                    row.appendChild(score);
+
+                    matchDetailBody.appendChild(row);
+                }
+            } else {
+                // Angels: single line of names joined by " - ". Wraps
+                // on width via word-break in CSS. Highlights the
+                // current user as a bold span.
+                const line = document.createElement('div');
+                line.id = 'match-detail-angels-names';
+                const players = data.players || [];
+                players.forEach((p, i) => {
+                    if (i > 0) line.appendChild(document.createTextNode(' - '));
+                    if (p.display_name === myName) {
+                        const me = document.createElement('span');
+                        me.className = 'me';
+                        me.textContent = p.display_name;
+                        line.appendChild(me);
+                    } else {
+                        line.appendChild(document.createTextNode(p.display_name));
+                    }
+                });
+                matchDetailBody.appendChild(line);
+            }
+
+            matchDetailTimeEl.textContent = formatMatchTimestamp(data.ended_at);
+        }
+
+        matchDetailClose.addEventListener('click', closeMatchDetailModal);
+        attachOverlayBackdropClose(matchDetailOverlay, closeMatchDetailModal);
+        matchDetailPanel.addEventListener('pointerdown', e => e.stopPropagation());
+        matchDetailPanel.addEventListener('touchstart', e => e.stopPropagation(), { passive: false });
+
+        // Esc closes — defers to the confirm dialog if it's stacked on top.
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape') return;
+            if (!matchDetailOverlay.classList.contains('open')) return;
+            if (confirmOverlay.classList.contains('open')) return;
+            closeMatchDetailModal();
+        });
+
         // ── Set / change / remove password ────────────────────────────
         //
         // Lives in its own modal (#profile-pw-overlay) layered on top

@@ -862,18 +862,138 @@ export async function meMatches(request, env) {
     if (!Number.isInteger(limit) || limit <= 0) limit = 20;
     limit = Math.min(limit, 50);
 
+    if (mode === 'devils') {
+        // Devils — the existing simple query. finishing_rank is the
+        // player's place in that one match.
+        const matches = await all(env,
+            `SELECT m.id AS match_id, m.ended_at,
+                    mp.final_score, mp.finishing_rank
+             FROM match_players mp
+             JOIN matches m ON m.id = mp.match_id
+             WHERE mp.user_id = ? AND m.mode = ?
+             ORDER BY m.ended_at DESC
+             LIMIT ?`,
+            user.id, mode, limit,
+        );
+        return json({ mode, matches });
+    }
+
+    // Angels — compute `global_rank` per match: this team's score's
+    // dense rank among ALL Angels matches ever. CTE collapses each
+    // match to one row (all players share final_score in Angels), then
+    // DENSE_RANK assigns rank over the whole set, then we filter to the
+    // user's matches. Cost is O(M log M) where M is the total count of
+    // Angels matches — fine for the current scale. If we ever hit
+    // tens of thousands, we'd add a denormalized team_score column to
+    // matches and an index, but that's premature now.
     const matches = await all(env,
-        `SELECT m.id AS match_id, m.ended_at,
-                mp.final_score, mp.finishing_rank
+        `WITH angels_team_scores AS (
+             SELECT m.id AS match_id, m.ended_at,
+                    MAX(mp.final_score) AS team_score
+             FROM matches m
+             JOIN match_players mp ON mp.match_id = m.id
+             WHERE m.mode = 'angels'
+             GROUP BY m.id, m.ended_at
+         ),
+         ranked AS (
+             SELECT match_id, ended_at, team_score,
+                    DENSE_RANK() OVER (ORDER BY team_score DESC) AS global_rank
+             FROM angels_team_scores
+         )
+         SELECT r.match_id, r.ended_at,
+                r.team_score AS final_score,
+                NULL          AS finishing_rank,
+                r.global_rank
+         FROM ranked r
+         WHERE EXISTS (
+             SELECT 1 FROM match_players mp
+             WHERE mp.match_id = r.match_id AND mp.user_id = ?
+         )
+         ORDER BY r.ended_at DESC
+         LIMIT ?`,
+        user.id, limit,
+    );
+    return json({ mode, matches });
+}
+
+// GET /me/match/:id
+//
+// Full participant list for one match the current user played in.
+// Refuses to return data for matches the user wasn't part of (that
+// check naturally double-serves as a check that the match exists).
+// For Angels also returns the team's global_rank — same dense-rank
+// math as the list endpoint, but scoped to one match.
+export async function meMatchDetail(request, env, _ctx, params) {
+    const a = await requireAuth(request, env);
+    if (a.response) return a.response;
+    const user = a.user;
+
+    const matchId = Number.parseInt(params.id, 10);
+    if (!Number.isInteger(matchId) || matchId <= 0) {
+        return json({ error: 'invalid_match_id' }, 400);
+    }
+
+    // Authorisation: user must have participated in this match. The
+    // join also gives us the match metadata in the same trip.
+    const me = await one(env,
+        `SELECT mp.final_score, mp.finishing_rank,
+                m.mode, m.ended_at
          FROM match_players mp
          JOIN matches m ON m.id = mp.match_id
-         WHERE mp.user_id = ? AND m.mode = ?
-         ORDER BY m.ended_at DESC
-         LIMIT ?`,
-        user.id, mode, limit,
+         WHERE mp.match_id = ? AND mp.user_id = ?`,
+        matchId, user.id,
+    );
+    if (!me) {
+        return json({ error: 'match_not_found' }, 404);
+    }
+
+    // Full player list. Devils: sorted by finishing_rank ascending
+    // (1st first). Angels: finishing_rank is NULL, so sort by score
+    // descending then display_name as a stable tie-break — though in
+    // practice Angels has one shared score, so display_name does most
+    // of the work.
+    const players = await all(env,
+        `SELECT u.display_name, mp.final_score, mp.finishing_rank
+         FROM match_players mp
+         JOIN users u ON u.id = mp.user_id
+         WHERE mp.match_id = ?
+         ORDER BY
+            CASE WHEN mp.finishing_rank IS NULL THEN 1 ELSE 0 END,
+            mp.finishing_rank ASC,
+            mp.final_score DESC,
+            u.display_name ASC`,
+        matchId,
     );
 
-    return json({ mode, matches });
+    const response = {
+        match_id: matchId,
+        mode: me.mode,
+        ended_at: me.ended_at,
+        my_final_score: me.final_score,
+        my_finishing_rank: me.finishing_rank,
+        players,
+    };
+
+    if (me.mode === 'angels') {
+        // Global rank: number of distinct higher Angels team_scores + 1.
+        // Subquery over the angels_team_scores derived table — same
+        // shape as the list endpoint's CTE, just used directly here.
+        const higher = await one(env,
+            `SELECT COUNT(*) AS c FROM (
+                 SELECT MAX(mp.final_score) AS team_score
+                 FROM matches m
+                 JOIN match_players mp ON mp.match_id = m.id
+                 WHERE m.mode = 'angels'
+                 GROUP BY m.id
+                 HAVING team_score > ?
+             )`,
+            me.final_score,
+        );
+        response.global_rank = (higher && higher.c != null ? higher.c : 0) + 1;
+        response.team_score = me.final_score;
+    }
+
+    return json(response);
 }
 
 export async function meSetPassword(request, env) {
