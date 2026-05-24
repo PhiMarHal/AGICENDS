@@ -298,6 +298,50 @@ export async function signupBespoke(request, env) {
     return json({ token, user });
 }
 
+// GET /auth/bespoke/exists?name=<name>
+//
+// Used by the onboarding flow to decide whether the chosen name should
+// take the user to "log in" or "create account" path. Returns:
+//   { has_bespoke: bool,   // there's a bespoke identity with this name
+//     name_taken: bool }   // some user has this display_name (any provider)
+//
+// Three meaningful combinations:
+//   has_bespoke=true                 → existing bespoke account, log in
+//   has_bespoke=false, name_taken=t  → wallet-only account owns the name,
+//                                      can't take it via signup
+//   name_taken=false                 → free, signup path
+//
+// Note: this leaks user enumeration (someone can probe whether a name
+// exists). The existing signup/signin endpoints already leak the same
+// information by returning username_taken / invalid_credentials, so
+// this isn't worse — just more convenient. Rate-limiting can be added
+// at the Worker level if it becomes a problem.
+export async function bespokeExists(request, env) {
+    const url = new URL(request.url);
+    const name = url.searchParams.get('name') || '';
+
+    // Reject malformed names outright — saves a DB round-trip and means
+    // callers can't probe with weird inputs.
+    if (!USERNAME_RE.test(name)) {
+        return json({ error: 'invalid_name' }, 400);
+    }
+    const bespokeExternalId = name.toLowerCase();
+
+    const bespoke = await one(env,
+        'SELECT id FROM auth_identities WHERE provider = ? AND external_id = ?',
+        'bespoke', bespokeExternalId,
+    );
+    const nameUser = await one(env,
+        'SELECT id FROM users WHERE display_name = ?',
+        name,
+    );
+
+    return json({
+        has_bespoke: !!bespoke,
+        name_taken: !!nameUser,
+    });
+}
+
 export async function signinBespoke(request, env) {
     const body = await safeJson(request);
     const username = body?.username;

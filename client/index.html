@@ -194,14 +194,16 @@
         }
 
         #auth-modal h2 {
-            margin: 0 0 4px 0;
+            margin: 0 0 18px 0;
+            /* line-break: title → username */
             font-size: 16px;
             font-weight: normal;
         }
 
         #auth-modal label {
             display: block;
-            margin-top: 10px;
+            margin-top: 16px;
+            /* line-break: between username and password */
             color: #ccc;
         }
 
@@ -219,13 +221,26 @@
             border-radius: 4px;
         }
 
+        /* Pass through the field-label gap when the password input is
+           wrapped in .password-eye-wrap (eye-icon support). Without
+           this, the wrap absorbs the input's margin-top:3px and the
+           label text sits flush against the input. */
+        #auth-modal .password-eye-wrap {
+            margin-top: 3px;
+        }
+
+        #auth-modal .password-eye-wrap input {
+            margin-top: 0;
+        }
+
         #auth-modal input:focus {
             outline: none;
             border-color: #888;
         }
 
         #auth-error {
-            margin-top: 10px;
+            margin-top: 18px;
+            /* line-break: between fields and error area */
             color: #f88;
             font-size: 12px;
             min-height: 14px;
@@ -258,7 +273,8 @@
             font-size: 14px;
             font-weight: bold;
             padding: 10px 12px;
-            margin-top: 14px;
+            margin-top: 18px;
+            /* line-break: error → submit, and divider → eth */
             border-radius: 4px;
             cursor: pointer;
             text-align: center;
@@ -274,7 +290,7 @@
         }
 
         #auth-toggle-link {
-            margin-top: 10px;
+            margin-top: 12px;
             color: #888;
             cursor: pointer;
             font-size: 12px;
@@ -292,7 +308,8 @@
             display: flex;
             align-items: center;
             gap: 8px;
-            margin: 14px 0 0 0;
+            margin: 18px 0 0 0;
+            /* line-break: toggle link → divider */
             color: #666;
             font-size: 11px;
             text-transform: uppercase;
@@ -1057,6 +1074,270 @@
            reload presents the choice fresh.
            Overlay is transparent so the cathedral background renders
            behind it. The buttons themselves are opaque. */
+        /* ── Onboarding overlay ────────────────────────────────────────
+           Full-screen black takeover shown on page load when the user
+           isn't authenticated (or when they choose Sign Out and reload).
+           Three step states swapped in-place: name → password → mode. */
+        #onboarding-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: #000;
+            color: #fff;
+            z-index: 50;
+            font-family: monospace;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            padding: 60px 20px 32px;
+            box-sizing: border-box;
+            overflow-y: auto;
+        }
+
+        #onboarding-overlay.open {
+            display: flex;
+        }
+
+        #onboarding-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            max-width: 600px;
+        }
+
+        .onboarding-step {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            width: 100%;
+        }
+
+        .onboarding-step.active {
+            display: flex;
+        }
+
+        .onboarding-step h1 {
+            font-size: 26px;
+            font-weight: bold;
+            letter-spacing: 2px;
+            text-align: center;
+            margin: 0;
+            color: #fff;
+            line-height: 1.3;
+        }
+
+        .onboarding-step h2 {
+            font-size: 22px;
+            font-weight: normal;
+            letter-spacing: 1px;
+            text-align: center;
+            margin: 10px 0 0 0;
+            color: #fff;
+            line-height: 1.3;
+        }
+
+        #onboarding-name-input,
+        #onboarding-password-input {
+            background: transparent;
+            color: #fff;
+            border: none;
+            border-bottom: 1px solid #555;
+            font-family: monospace;
+            font-size: 22px;
+            text-align: center;
+            padding: 8px 12px;
+            width: 280px;
+            max-width: 90vw;
+            outline: none;
+            letter-spacing: 1px;
+            margin-top: 56px;
+        }
+
+        #onboarding-name-input:focus,
+        #onboarding-password-input:focus {
+            border-bottom-color: #fff;
+        }
+
+        .onboarding-password-wrap {
+            position: relative;
+            width: 280px;
+            max-width: 90vw;
+            margin-top: 56px;
+        }
+
+        .onboarding-password-wrap input {
+            width: 100%;
+            margin-top: 0;
+            padding-right: 36px;
+            /* leave room for the eye */
+            box-sizing: border-box;
+        }
+
+        /* Eye icon for revealing/hiding password — used in onboarding
+           plus the auth and profile-password modals. */
+        .password-eye {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            cursor: pointer;
+            user-select: none;
+            color: #888;
+            font-size: 16px;
+            line-height: 1;
+            padding: 4px;
+        }
+
+        .password-eye:hover {
+            color: #fff;
+        }
+
+        /* Positioning context for the eye when used inside the auth /
+           profile password forms (where the inputs are block-level
+           full-width). Onboarding has its own .onboarding-password-wrap. */
+        .password-eye-wrap {
+            position: relative;
+            display: block;
+            width: 100%;
+        }
+
+        /* Scoped padding-right overrides — the ID-prefixed rules
+           defined for each modal's inputs beat a plain .class rule on
+           specificity, so we win by scoping the wrap's override too. */
+        #auth-modal .password-eye-wrap input,
+        #profile-pw-panel .password-eye-wrap input {
+            padding-right: 32px;
+        }
+
+        /* Bottom action area — holds either the NEXT button or an
+           error line. Skip / Back live below, more muted. The whole
+           block has a min-height so it doesn't reflow as the action
+           swaps. */
+        #onboarding-bottom {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 14px;
+            min-height: 100px;
+            justify-content: flex-start;
+        }
+
+        #onboarding-action-slot {
+            min-height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #onboarding-next-btn {
+            background: #fff;
+            color: #000;
+            border: none;
+            font-family: monospace;
+            font-size: 16px;
+            font-weight: bold;
+            letter-spacing: 2px;
+            padding: 10px 32px;
+            border-radius: 4px;
+            cursor: pointer;
+            display: none;
+        }
+
+        #onboarding-next-btn.show {
+            display: block;
+        }
+
+        #onboarding-next-btn:hover {
+            background: #ddd;
+        }
+
+        #onboarding-next-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        #onboarding-error {
+            color: #ff6b6b;
+            font-size: 14px;
+            text-align: center;
+            display: none;
+            max-width: 320px;
+        }
+
+        #onboarding-error.show {
+            display: block;
+        }
+
+        #onboarding-skip-link,
+        #onboarding-back-link {
+            color: #777;
+            cursor: pointer;
+            font-size: 12px;
+            text-decoration: underline;
+            display: none;
+        }
+
+        #onboarding-skip-link.show,
+        #onboarding-back-link.show {
+            display: block;
+        }
+
+        #onboarding-skip-link:hover,
+        #onboarding-back-link:hover {
+            color: #ccc;
+        }
+
+        /* Step 3 — mode buttons. Larger than the field but smaller
+           than the existing in-cathedral mode picker; this is the
+           initial chrome-less takeover, kept tighter. */
+        .onboarding-mode-btn {
+            background: #fff;
+            color: #000;
+            border: none;
+            font-family: monospace;
+            font-size: 28px;
+            font-weight: bold;
+            letter-spacing: 3px;
+            padding: 18px 56px;
+            border-radius: 4px;
+            cursor: pointer;
+            min-width: 220px;
+        }
+
+        .onboarding-mode-btn:hover {
+            background: #ddd;
+        }
+
+        .onboarding-mode-buttons {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 14px;
+            margin-top: 48px;
+        }
+
+        .onboarding-mode-divider {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: #666;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            width: 220px;
+        }
+
+        .onboarding-mode-divider::before,
+        .onboarding-mode-divider::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: #333;
+        }
+
         #mode-picker-overlay {
             display: flex;
             position: fixed;
@@ -1168,7 +1449,7 @@
     <div id="menu-panel">
         <span id="menu-player-name">you are …</span>
         <hr>
-        <button id="menu-auth-btn">Sign in</button>
+        <button id="menu-auth-btn">Log in</button>
         <div id="menu-mmr" style="display:none">1500 MMR</div>
         <div id="menu-profile-link" style="display:none">Profile</div>
         <hr>
@@ -1180,11 +1461,48 @@
     <!-- Mode picker — visible on every page load, also re-summoned from
          the menu's "Switch mode" entry. Transparent overlay lets the
          cathedral background render through. -->
-    <div id="mode-picker-overlay">
+    <!-- Onboarding overlay. Shown on initial page load via
+         startOnboardingFlow(). Three step states swap in place. -->
+    <div id="onboarding-overlay">
+        <div id="onboarding-content">
+            <div class="onboarding-step" id="onboarding-step-name">
+                <h1>WHAT IS YOUR NAME?</h1>
+                <input type="text" id="onboarding-name-input" maxlength="16" autocomplete="username"
+                    autocapitalize="off" autocorrect="off" spellcheck="false">
+            </div>
+            <div class="onboarding-step" id="onboarding-step-password">
+                <h1 id="onboarding-password-title">…</h1>
+                <h2 id="onboarding-password-subtitle">…</h2>
+                <div class="onboarding-password-wrap">
+                    <input type="password" id="onboarding-password-input" maxlength="64"
+                        autocomplete="current-password">
+                    <span class="password-eye" id="onboarding-password-eye">👁</span>
+                </div>
+            </div>
+            <div class="onboarding-step" id="onboarding-step-mode">
+                <h1>WHO ARE YOU TODAY?</h1>
+                <div class="onboarding-mode-buttons">
+                    <button class="onboarding-mode-btn" data-mode="devils" type="button">DEVIL</button>
+                    <div class="onboarding-mode-divider">or</div>
+                    <button class="onboarding-mode-btn" data-mode="angels" type="button">ANGEL</button>
+                </div>
+            </div>
+        </div>
+        <div id="onboarding-bottom">
+            <div id="onboarding-action-slot">
+                <button id="onboarding-next-btn" type="button">NEXT</button>
+                <div id="onboarding-error"></div>
+            </div>
+            <div id="onboarding-skip-link">Skip</div>
+            <div id="onboarding-back-link">Back</div>
+        </div>
+    </div>
+
+    <div id="mode-picker-overlay" class="hidden">
         <div id="mode-picker-content">
             <div class="mode-picker-buttons">
-                <button class="mode-button" data-mode="devils">DEVILS</button>
-                <button class="mode-button" data-mode="angels">ANGELS</button>
+                <button class="mode-button" data-mode="devils">DEVIL</button>
+                <button class="mode-button" data-mode="angels">ANGEL</button>
             </div>
         </div>
     </div>
@@ -1279,10 +1597,16 @@
         <div id="profile-pw-panel">
             <div id="profile-pw-close" title="Close">×</div>
             <h2 id="profile-pw-title">Change password</h2>
-            <input type="password" id="profile-pw-current" placeholder="Current password"
-                autocomplete="current-password" maxlength="64">
-            <input type="password" id="profile-pw-new" placeholder="New password" autocomplete="new-password"
-                maxlength="64">
+            <span class="password-eye-wrap">
+                <input type="password" id="profile-pw-current" placeholder="Current password"
+                    autocomplete="current-password" maxlength="64">
+                <span class="password-eye" id="profile-pw-current-eye">👁</span>
+            </span>
+            <span class="password-eye-wrap">
+                <input type="password" id="profile-pw-new" placeholder="New password" autocomplete="new-password"
+                    maxlength="64">
+                <span class="password-eye" id="profile-pw-new-eye">👁</span>
+            </span>
             <div class="profile-error" id="profile-pw-error"></div>
             <div id="profile-pw-buttons">
                 <button class="profile-action-btn profile-pw-cancel" id="profile-pw-cancel"
@@ -1306,18 +1630,21 @@
     <!-- Auth modal (sign in / sign up / claim wallet username). Hidden by default. -->
     <div id="auth-overlay">
         <div id="auth-modal">
-            <h2 id="auth-title">Sign in</h2>
+            <h2 id="auth-title">Log in</h2>
             <div id="auth-subtitle"></div>
             <label id="auth-username-label">Username
                 <input type="text" id="auth-username" autocomplete="username" maxlength="16" autocapitalize="off"
                     autocorrect="off" spellcheck="false">
             </label>
             <label id="auth-password-label">Password
-                <input type="password" id="auth-password" autocomplete="current-password" maxlength="64">
+                <span class="password-eye-wrap">
+                    <input type="password" id="auth-password" autocomplete="current-password" maxlength="64">
+                    <span class="password-eye" id="auth-password-eye">👁</span>
+                </span>
             </label>
             <div id="auth-error"></div>
-            <button class="auth-full-btn" id="auth-submit" type="button">Sign In With Account</button>
-            <div id="auth-toggle-link">Don't have an account? Sign up</div>
+            <button class="auth-full-btn" id="auth-submit" type="button">Account Login</button>
+            <div id="auth-toggle-link">Don't have an account?</div>
             <div id="auth-divider">or</div>
             <button class="auth-full-btn" id="auth-eth-btn" type="button">Sign In With Ethereum</button>
         </div>
@@ -1476,6 +1803,41 @@
             } catch { /* ignore — private mode, etc. */ }
         }
 
+        // ── Shared validation + UI helpers ────────────────────────────
+        // validateName mirrors the server's USERNAME_RE constraints
+        // (3–16 chars, A–Z a–z 0–9 underscore). Returns one of two
+        // specific short messages so the modal and onboarding can show
+        // a non-wrapping error.
+        function validateName(name) {
+            if (typeof name !== 'string' || name.length < 3 || name.length > 16) {
+                return { ok: false, msg: 'Names must be 3-16 characters' };
+            }
+            if (!/^[A-Za-z0-9_]+$/.test(name)) {
+                return { ok: false, msg: 'Letters/digits/underscore only' };
+            }
+            return { ok: true };
+        }
+        // Matches server-side MIN_PASSWORD_LEN / MAX_PASSWORD_LEN.
+        function validatePassword(pw) {
+            if (typeof pw !== 'string' || pw.length < 8) {
+                return { ok: false, msg: 'Password must be at least 8 characters' };
+            }
+            if (pw.length > 64) {
+                return { ok: false, msg: 'Password must be at most 64 characters' };
+            }
+            return { ok: true };
+        }
+        // Attaches a reveal/hide click handler to an eye icon next to a
+        // password input. Flips input.type and swaps the icon glyph.
+        function setupPasswordEye(eyeEl, inputEl) {
+            if (!eyeEl || !inputEl) return;
+            eyeEl.addEventListener('click', () => {
+                const showing = inputEl.type === 'text';
+                inputEl.type = showing ? 'password' : 'text';
+                eyeEl.textContent = showing ? '👁' : '🙈';
+            });
+        }
+
         async function authSignIn(username, password) {
             const res = await fetch(AUTH_WORKER_URL + '/auth/bespoke/signin', {
                 method: 'POST',
@@ -1552,7 +1914,7 @@
                 if (profileEl) profileEl.style.display = 'block';
             } else {
                 nameEl.textContent = 'you are ' + (mySessionId || '…');
-                btnEl.textContent = 'Sign in';
+                btnEl.textContent = 'Log in';
                 if (mmrEl) mmrEl.style.display = 'none';
                 if (profileEl) profileEl.style.display = 'none';
             }
@@ -1594,17 +1956,17 @@
             authSubtitle.textContent = '';
 
             if (authMode === 'signin') {
-                authTitle.textContent = 'Sign in';
-                authSubmit.textContent = 'Sign In With Account';
+                authTitle.textContent = 'Log in';
+                authSubmit.textContent = 'Account Login';
                 authPassword.autocomplete = 'current-password';
                 authPasswordLabel.firstChild.textContent = 'Password';
-                authToggleLink.textContent = "Don't have an account? Sign up";
+                authToggleLink.textContent = "Don't have an account?";
             } else if (authMode === 'signup') {
-                authTitle.textContent = 'Sign up';
-                authSubmit.textContent = 'Sign Up';
+                authTitle.textContent = 'Create Account';
+                authSubmit.textContent = 'Create New Account';
                 authPassword.autocomplete = 'new-password';
                 authPasswordLabel.firstChild.textContent = 'Password';
-                authToggleLink.textContent = 'Already have an account? Sign in';
+                authToggleLink.textContent = 'Already have an account?';
             } else if (authMode === 'claim') {
                 authTitle.textContent = 'Choose a username';
                 authSubtitle.textContent =
@@ -1685,6 +2047,11 @@
                     authError.textContent = 'Username required.';
                     return;
                 }
+                const v = validateName(username);
+                if (!v.ok) {
+                    authError.textContent = v.msg;
+                    return;
+                }
                 if (!walletClaimTicket) {
                     authError.textContent = 'Wallet session expired. Try Sign In With Ethereum again.';
                     return;
@@ -1719,6 +2086,15 @@
                 authError.textContent = 'Username and password required.';
                 return;
             }
+            // Client-side name validation with the specific short
+            // messages — keeps the modal width stable instead of
+            // overflowing on the old combined "Username must be 3–16
+            // characters, letters/digits/underscore only." string.
+            const v = validateName(username);
+            if (!v.ok) {
+                authError.textContent = v.msg;
+                return;
+            }
             authError.textContent = '';
             authSubmit.disabled = true;
             try {
@@ -1751,6 +2127,7 @@
         }
 
         authSubmit.addEventListener('click', submitAuthForm);
+        setupPasswordEye(document.getElementById('auth-password-eye'), authPassword);
         // Enter from either input triggers submit.
         [authUsername, authPassword].forEach(el => {
             el.addEventListener('keydown', (e) => {
@@ -1900,6 +2277,248 @@
         }
 
         authEthBtn.addEventListener('click', signInWithEthereum);
+
+        // ── Onboarding flow ───────────────────────────────────────────
+        //
+        // Replaces the page-load mode-picker takeover. Three steps:
+        //
+        //   1 (name): ask for a display name, validate locally, query
+        //     the worker to see if it's a bespoke account → routes to
+        //     step 2 in signin or signup mode. A subtle "Skip" jumps to
+        //     step 3 anonymously.
+        //   2 (password): one input, mode-dependent title/subtitle.
+        //     On NEXT we hit /auth/bespoke/signin or /auth/bespoke/signup
+        //     accordingly. Back link returns to step 1 with the name
+        //     preserved.
+        //   3 (mode): DEVIL or ANGEL — hands off to selectMode(), which
+        //     hides the overlay, sets currentMode, and connects.
+        //
+        // If the user is already logged in (token in localStorage), we
+        // skip steps 1+2 and land directly on step 3. The token might
+        // turn out to be invalid; ensureAuthState() (running in
+        // parallel) handles that by quietly dropping it — the user
+        // continues as anon, picks a mode, and the WS opens anonymous.
+
+        const onboardingOverlay = document.getElementById('onboarding-overlay');
+        const onbStepName = document.getElementById('onboarding-step-name');
+        const onbStepPassword = document.getElementById('onboarding-step-password');
+        const onbStepMode = document.getElementById('onboarding-step-mode');
+        const onbNameInput = document.getElementById('onboarding-name-input');
+        const onbPasswordInput = document.getElementById('onboarding-password-input');
+        const onbPasswordEye = document.getElementById('onboarding-password-eye');
+        const onbPasswordTitle = document.getElementById('onboarding-password-title');
+        const onbPasswordSubtitle = document.getElementById('onboarding-password-subtitle');
+        const onbNextBtn = document.getElementById('onboarding-next-btn');
+        const onbErrorEl = document.getElementById('onboarding-error');
+        const onbSkipLink = document.getElementById('onboarding-skip-link');
+        const onbBackLink = document.getElementById('onboarding-back-link');
+        const onbModeButtons = document.querySelectorAll('.onboarding-mode-btn');
+
+        // Step 2 mode: 'signin' or 'signup' — derived from the
+        // /auth/bespoke/exists result before showing step 2.
+        let onbAuthMode = null;
+        // The name the user typed in step 1, persisted so Back works.
+        let onbName = '';
+        // Which step is currently active.
+        let onbStep = null;
+
+        // The bottom action slot shows either the NEXT button, an
+        // error line, or nothing. These two helpers keep the two
+        // states mutually exclusive so they never stack.
+        function setOnboardingNext(show) {
+            onbNextBtn.classList.toggle('show', !!show);
+            if (show) onbErrorEl.classList.remove('show');
+        }
+        function setOnboardingError(msg) {
+            onbErrorEl.textContent = msg;
+            onbErrorEl.classList.add('show');
+            onbNextBtn.classList.remove('show');
+        }
+        function clearOnboardingError() {
+            onbErrorEl.classList.remove('show');
+        }
+
+        function showOnboardingStep(step) {
+            onbStep = step;
+            [onbStepName, onbStepPassword, onbStepMode].forEach(el => el.classList.remove('active'));
+            clearOnboardingError();
+            setOnboardingNext(false);
+            onbSkipLink.classList.remove('show');
+            onbBackLink.classList.remove('show');
+
+            if (step === 'name') {
+                onbStepName.classList.add('active');
+                onbSkipLink.classList.add('show');
+                onboardingNameChanged();         // restore NEXT if name already valid
+                setTimeout(() => onbNameInput.focus(), 0);
+            } else if (step === 'password') {
+                onbStepPassword.classList.add('active');
+                onbBackLink.classList.add('show');
+                onboardingPasswordChanged();
+                setTimeout(() => onbPasswordInput.focus(), 0);
+            } else if (step === 'mode') {
+                onbStepMode.classList.add('active');
+                // No NEXT here — picking DEVIL or ANGEL is the action.
+            }
+        }
+
+        // Live validation as the user types. On each keystroke we
+        // either show NEXT (valid) or the specific error (invalid).
+        // An empty input shows nothing — don't yell at users before
+        // they've started.
+        function onboardingNameChanged() {
+            const name = onbNameInput.value.trim();
+            onbName = name;
+            if (name.length === 0) {
+                setOnboardingNext(false);
+                clearOnboardingError();
+                return;
+            }
+            const v = validateName(name);
+            if (v.ok) setOnboardingNext(true);
+            else setOnboardingError(v.msg);
+        }
+        function onboardingPasswordChanged() {
+            const pw = onbPasswordInput.value;
+            if (pw.length === 0) {
+                setOnboardingNext(false);
+                clearOnboardingError();
+                return;
+            }
+            const v = validatePassword(pw);
+            if (v.ok) setOnboardingNext(true);
+            else setOnboardingError(v.msg);
+        }
+
+        // Step 1 submit — checks the name's status server-side and
+        // routes to the appropriate step 2 variant.
+        async function onboardingSubmitName() {
+            const v = validateName(onbName);
+            if (!v.ok) {
+                setOnboardingError(v.msg);
+                return;
+            }
+            onbNextBtn.disabled = true;
+            try {
+                const res = await fetch(
+                    AUTH_WORKER_URL + '/auth/bespoke/exists?name=' + encodeURIComponent(onbName),
+                );
+                const data = await res.json();
+                if (!res.ok || !data) {
+                    setOnboardingError('Network error. Try again.');
+                    return;
+                }
+                if (data.has_bespoke) {
+                    // Existing bespoke account — login flow.
+                    onbAuthMode = 'signin';
+                    onbPasswordTitle.textContent = 'WE KNOW THIS NAME.';
+                    onbPasswordSubtitle.textContent = 'UNLOCK WITH YOUR SECRET:';
+                    onbPasswordInput.autocomplete = 'current-password';
+                    onbPasswordInput.value = '';
+                    showOnboardingStep('password');
+                } else if (data.name_taken) {
+                    // Name owned by a wallet-only account — can't
+                    // claim it via bespoke signup.
+                    setOnboardingError('That name is taken. Try another.');
+                } else {
+                    // Free name — signup flow.
+                    onbAuthMode = 'signup';
+                    onbPasswordTitle.textContent = 'THIS NAME IS NEW.';
+                    onbPasswordSubtitle.textContent = 'SAVE IT WITH A SECRET:';
+                    onbPasswordInput.autocomplete = 'new-password';
+                    onbPasswordInput.value = '';
+                    showOnboardingStep('password');
+                }
+            } catch (_) {
+                setOnboardingError('Network error. Try again.');
+            } finally {
+                onbNextBtn.disabled = false;
+            }
+        }
+
+        // Step 2 submit — signin or signup depending on onbAuthMode.
+        async function onboardingSubmitPassword() {
+            const pw = onbPasswordInput.value;
+            const v = validatePassword(pw);
+            if (!v.ok) {
+                setOnboardingError(v.msg);
+                return;
+            }
+            onbNextBtn.disabled = true;
+            try {
+                const result = onbAuthMode === 'signin'
+                    ? await authSignIn(onbName, pw)
+                    : await authSignUp(onbName, pw);
+                if (result && result.token && result.user) {
+                    setStoredToken(result.token);
+                    currentUser = result.user;
+                    updateMenuFromAuth();
+                    showOnboardingStep('mode');
+                } else {
+                    setOnboardingError(friendlyAuthError(result));
+                }
+            } catch (_) {
+                setOnboardingError('Network error. Try again.');
+            } finally {
+                onbNextBtn.disabled = false;
+            }
+        }
+
+        // NEXT button dispatches based on current step.
+        function onboardingNext() {
+            if (onbStep === 'name') onboardingSubmitName();
+            else if (onbStep === 'password') onboardingSubmitPassword();
+        }
+
+        onbNameInput.addEventListener('input', onboardingNameChanged);
+        onbNameInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && onbNextBtn.classList.contains('show')) {
+                e.preventDefault();
+                onboardingNext();
+            }
+        });
+        onbPasswordInput.addEventListener('input', onboardingPasswordChanged);
+        onbPasswordInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && onbNextBtn.classList.contains('show')) {
+                e.preventDefault();
+                onboardingNext();
+            }
+        });
+        onbNextBtn.addEventListener('click', onboardingNext);
+        onbSkipLink.addEventListener('click', () => showOnboardingStep('mode'));
+        onbBackLink.addEventListener('click', () => {
+            // Preserve the name so the user doesn't have to retype it.
+            onbNameInput.value = onbName;
+            showOnboardingStep('name');
+        });
+
+        // Step 3: mode picked. Hand off to selectMode() which sets the
+        // mode, hides the (still-hidden) mode picker, and calls
+        // connect() — same path the in-game "Switch mode" link uses,
+        // so initial-load and mid-session mode changes share code.
+        onbModeButtons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                onboardingOverlay.classList.remove('open');
+                selectMode(btn.dataset.mode);
+            });
+        });
+
+        setupPasswordEye(onbPasswordEye, onbPasswordInput);
+
+        // Entry point — called from Scene.create() in place of the
+        // previous immediate connect(). Decides which step to land on
+        // based on whether there's a token in localStorage; if yes,
+        // we trust it for the UI decision and let ensureAuthState()
+        // (already in flight) confirm it asynchronously.
+        function startOnboardingFlow() {
+            onboardingOverlay.classList.add('open');
+            if (getStoredToken()) {
+                showOnboardingStep('mode');
+            } else {
+                showOnboardingStep('name');
+            }
+        }
+
 
         // ── Profile modal ─────────────────────────────────────────────
         //
@@ -2282,30 +2901,41 @@
         });
 
         async function openMatchDetailModal(matchId) {
-            // Reset to placeholders so a slow fetch doesn't reveal
-            // last-opened-match content.
-            matchDetailRankEl.textContent = '…';
-            matchDetailScoreEl.textContent = '…';
-            matchDetailBody.innerHTML = '<div class="profile-empty" style="text-align:center">Loading…</div>';
-            matchDetailTimeEl.textContent = '';
-            matchDetailOverlay.classList.add('open');
-
+            // We fetch first, then render, then open — so the modal
+            // appears already populated and never jerks around its
+            // layout. The trade-off: a delay between click and the
+            // modal becoming visible. In practice the Worker call is
+            // a few small queries, sub-100ms typical, so the click
+            // still feels immediate. If we ever need to indicate
+            // "working on it" for slow networks we can add a delayed
+            // spinner on the matches list itself; not needed now.
             const token = getStoredToken();
             try {
                 const res = await fetch(AUTH_WORKER_URL + '/me/match/' + encodeURIComponent(matchId), {
                     headers: { authorization: 'Bearer ' + token },
                 });
                 if (!res.ok) {
-                    matchDetailBody.innerHTML =
-                        '<div class="profile-empty" style="text-align:center">Couldn\'t load match.</div>';
+                    showMatchDetailError('Couldn\'t load match.');
                     return;
                 }
                 const data = await res.json();
                 renderMatchDetail(data);
+                matchDetailOverlay.classList.add('open');
             } catch (_) {
-                matchDetailBody.innerHTML =
-                    '<div class="profile-empty" style="text-align:center">Couldn\'t load match.</div>';
+                showMatchDetailError('Couldn\'t load match.');
             }
+        }
+
+        // Populates the modal with a single error line and opens it.
+        // Used for any non-success path so the user still gets visual
+        // feedback that their click registered.
+        function showMatchDetailError(msg) {
+            matchDetailRankEl.textContent = '—';
+            matchDetailScoreEl.textContent = '';
+            matchDetailBody.innerHTML =
+                '<div class="profile-empty" style="text-align:center">' + msg + '</div>';
+            matchDetailTimeEl.textContent = '';
+            matchDetailOverlay.classList.add('open');
         }
 
         function closeMatchDetailModal() {
@@ -2524,6 +3154,8 @@
             }
         }
         profilePwSave.addEventListener('click', submitProfilePassword);
+        setupPasswordEye(document.getElementById('profile-pw-current-eye'), profilePwCurrent);
+        setupPasswordEye(document.getElementById('profile-pw-new-eye'), profilePwNew);
         [profilePwCurrent, profilePwNew].forEach(el => {
             el.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') submitProfilePassword();
@@ -2746,7 +3378,12 @@
         }
         function updateModeIndicator() {
             if (menuCurrentModeEl) {
-                menuCurrentModeEl.textContent = (currentMode || '').toUpperCase();
+                // Internal mode codes stay plural ('devils', 'angels')
+                // for the server API; UI label is singular.
+                const label = currentMode === 'devils' ? 'DEVIL'
+                    : currentMode === 'angels' ? 'ANGEL'
+                        : '';
+                menuCurrentModeEl.textContent = label;
             }
             if (menuSwitchModeLink) {
                 menuSwitchModeLink.classList.toggle('disabled', myInActiveRound);
@@ -3032,11 +3669,18 @@
                 // automatically when the real world_init lands.
                 this.spawnPlaceholderSideWalls();
 
-                // Verify any stored auth token in parallel with connecting.
-                // ensureAuthState updates the menu when it resolves; connect()
-                // doesn't need to wait for it.
+                // Verify any stored auth token in parallel with showing
+                // the onboarding flow. ensureAuthState() updates the
+                // menu when it resolves; onboarding's step decision is
+                // based on token presence (not validity) so we don't
+                // need to await it.
                 ensureAuthState();
-                connect();
+                startOnboardingFlow();
+                // connect() is no longer called here. The onboarding
+                // step 3 (mode picker) hands off to selectMode() which
+                // opens the WebSocket once a mode is chosen — meaning
+                // the cathedral doesn't generate until the user is
+                // ready to play.
             }
 
             spawnPlaceholderSideWalls() {

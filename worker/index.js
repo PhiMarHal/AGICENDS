@@ -205,6 +205,7 @@ router.post('/auth/logout', auth.handleLogout);
 // Bespoke (username + password).
 router.post('/auth/bespoke/signup', auth.signupBespoke);
 router.post('/auth/bespoke/signin', auth.signinBespoke);
+router.get('/auth/bespoke/exists', auth.bespokeExists);
 
 // Sign In With Ethereum (EIP-4361).
 //   nonce   → server gives the client a random nonce to embed in the
