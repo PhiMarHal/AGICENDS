@@ -1103,7 +1103,11 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
+            /* Top-aligned so h1 sits near the top of the screen rather
+               than mid-viewport. Subtitle and field are pushed back
+               down toward the visual center with their own margins
+               (see h2 and input rules below). */
+            justify-content: flex-start;
             width: 100%;
             max-width: 600px;
         }
@@ -1120,7 +1124,7 @@
         }
 
         .onboarding-step h1 {
-            font-size: 26px;
+            font-size: 36px;
             font-weight: bold;
             letter-spacing: 2px;
             text-align: center;
@@ -1130,11 +1134,14 @@
         }
 
         .onboarding-step h2 {
-            font-size: 22px;
+            font-size: 28px;
             font-weight: normal;
             letter-spacing: 1px;
             text-align: center;
-            margin: 10px 0 0 0;
+            /* Big gap pushes the subtitle down to roughly the
+               vertical middle, where the user expects it. h1
+               stays anchored at the top above. */
+            margin: 26vh 0 0 0;
             color: #fff;
             line-height: 1.3;
         }
@@ -1153,7 +1160,6 @@
             max-width: 90vw;
             outline: none;
             letter-spacing: 1px;
-            margin-top: 56px;
         }
 
         #onboarding-name-input:focus,
@@ -1161,11 +1167,19 @@
             border-bottom-color: #fff;
         }
 
+        /* Step 1: input sits near the visual middle, well below the
+           top-anchored title. */
+        #onboarding-step-name #onboarding-name-input {
+            margin-top: 30vh;
+        }
+
+        /* Step 2: wrap sits a short distance below the subtitle, which
+           is already pushed down. */
         .onboarding-password-wrap {
             position: relative;
             width: 280px;
             max-width: 90vw;
-            margin-top: 56px;
+            margin-top: 36px;
         }
 
         .onboarding-password-wrap input {
@@ -1177,22 +1191,44 @@
         }
 
         /* Eye icon for revealing/hiding password — used in onboarding
-           plus the auth and profile-password modals. */
+           plus the auth and profile-password modals. Sized as a
+           full-height column on the right edge of the input, with
+           flex-centering of the glyph so it sits true to the input's
+           vertical center regardless of the input's height or any
+           emoji-specific baseline quirks. */
         .password-eye {
             position: absolute;
-            right: 8px;
-            top: 50%;
-            transform: translateY(-50%);
+            right: 0;
+            top: 0;
+            bottom: 0;
+            width: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             cursor: pointer;
             user-select: none;
             color: #888;
             font-size: 16px;
             line-height: 1;
-            padding: 4px;
         }
 
         .password-eye:hover {
             color: #fff;
+        }
+
+        /* When the password is currently revealed, overlay a diagonal
+           bar across the eye glyph — same visual pattern as the music
+           mute toggle. */
+        .password-eye.revealed::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 2px;
+            right: 2px;
+            height: 2px;
+            background: currentColor;
+            transform: translateY(-50%) rotate(-45deg);
+            pointer-events: none;
         }
 
         /* Positioning context for the eye when used inside the auth /
@@ -1290,6 +1326,19 @@
             color: #ccc;
         }
 
+        /* Player identity shown at the bottom of step 3 — display_name
+           if logged in, "anonymous" otherwise. Same muted gray as the
+           Skip/Back links. */
+        #onboarding-player-name {
+            color: #777;
+            font-size: 12px;
+            display: none;
+        }
+
+        #onboarding-player-name.show {
+            display: block;
+        }
+
         /* Step 3 — mode buttons. Larger than the field but smaller
            than the existing in-cathedral mode picker; this is the
            initial chrome-less takeover, kept tighter. */
@@ -1316,7 +1365,10 @@
             flex-direction: column;
             align-items: center;
             gap: 14px;
-            margin-top: 48px;
+            /* Push the buttons down so they sit near the vertical
+               middle of the screen, matching where h2/inputs land in
+               steps 1 and 2. The h1 stays anchored at the top. */
+            margin-top: 26vh;
         }
 
         .onboarding-mode-divider {
@@ -1495,6 +1547,7 @@
             </div>
             <div id="onboarding-skip-link">Skip</div>
             <div id="onboarding-back-link">Back</div>
+            <div id="onboarding-player-name"></div>
         </div>
     </div>
 
@@ -1662,7 +1715,7 @@
         // ========================================================================
         const MUSIC_BASE_URL = 'https://agiscend.loiyaa.com/';
         const MUSIC_IS_LOCAL = window.location.protocol === 'file:';
-        const MUSIC_TRACK_COUNT = 21;
+        const MUSIC_TRACK_COUNT = 22;
         const MUSIC_SILENCE_BETWEEN_TRACKS = 4000;
 
         let musicPlaylist = [];
@@ -1828,13 +1881,14 @@
             return { ok: true };
         }
         // Attaches a reveal/hide click handler to an eye icon next to a
-        // password input. Flips input.type and swaps the icon glyph.
+        // password input. Flips input.type and toggles a .revealed
+        // class on the eye, which adds a diagonal bar via CSS ::after.
         function setupPasswordEye(eyeEl, inputEl) {
             if (!eyeEl || !inputEl) return;
             eyeEl.addEventListener('click', () => {
                 const showing = inputEl.type === 'text';
                 inputEl.type = showing ? 'password' : 'text';
-                eyeEl.textContent = showing ? '👁' : '🙈';
+                eyeEl.classList.toggle('revealed', !showing);
             });
         }
 
@@ -2312,6 +2366,7 @@
         const onbErrorEl = document.getElementById('onboarding-error');
         const onbSkipLink = document.getElementById('onboarding-skip-link');
         const onbBackLink = document.getElementById('onboarding-back-link');
+        const onbPlayerName = document.getElementById('onboarding-player-name');
         const onbModeButtons = document.querySelectorAll('.onboarding-mode-btn');
 
         // Step 2 mode: 'signin' or 'signup' — derived from the
@@ -2345,6 +2400,7 @@
             setOnboardingNext(false);
             onbSkipLink.classList.remove('show');
             onbBackLink.classList.remove('show');
+            onbPlayerName.classList.remove('show');
 
             if (step === 'name') {
                 onbStepName.classList.add('active');
@@ -2359,6 +2415,15 @@
             } else if (step === 'mode') {
                 onbStepMode.classList.add('active');
                 // No NEXT here — picking DEVIL or ANGEL is the action.
+                // Show the player identity at the bottom: display_name
+                // if logged in, "anonymous" otherwise. (The real session
+                // ID isn't assigned until we connect, which happens on
+                // mode pick — so before then we can only show
+                // "anonymous" for unauthed users.)
+                onbPlayerName.textContent = currentUser
+                    ? currentUser.display_name
+                    : 'anonymous';
+                onbPlayerName.classList.add('show');
             }
         }
 
@@ -2411,7 +2476,7 @@
                 if (data.has_bespoke) {
                     // Existing bespoke account — login flow.
                     onbAuthMode = 'signin';
-                    onbPasswordTitle.textContent = 'WE KNOW THIS NAME.';
+                    onbPasswordTitle.textContent = 'A KNOWN NAME';
                     onbPasswordSubtitle.textContent = 'UNLOCK WITH YOUR SECRET:';
                     onbPasswordInput.autocomplete = 'current-password';
                     onbPasswordInput.value = '';
