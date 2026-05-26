@@ -859,17 +859,35 @@ export async function meProfile(request, env) {
     const hasBespoke = identities.some(i => i.provider === 'bespoke');
     const ethRow = identities.find(i => i.provider === 'ethereum');
 
-    // Per-mode stats. One round trip with a GROUP BY. The CASE-inside-
-    // SUM idiom is only meaningful for Devils (Angels doesn't rank
-    // players), but it harmlessly returns 0 for Angels rows.
+    // Per-mode stats. One round trip with a GROUP BY.
+    //
+    // Special-casing solo Devils:
+    //   A Devils round with exactly one participant is functionally an
+    //   Angels run — no opponents, no MMR change, trivially "1st".
+    //   Counting those as Devils games/wins makes the stats feel
+    //   inflated ("22/24 wins" when 20 of those were solo). So:
+    //     • games / wins: solo Devils are excluded.
+    //     • best_score:   solo Devils ARE included — a high solo run
+    //                     is still a high score, and we want it to
+    //                     flow up to the TOP SCORE footer in the UI.
+    //
+    // The mc subquery gives every match its participant count, joined
+    // back so the CASE expressions can read it.
     const statRows = await all(env,
         `SELECT
-             m.mode                                              AS mode,
-             COUNT(*)                                            AS games,
-             COALESCE(SUM(CASE WHEN mp.finishing_rank = 1 THEN 1 ELSE 0 END), 0) AS wins,
-             MAX(mp.final_score)                                 AS best_score
+             m.mode AS mode,
+             SUM(CASE WHEN m.mode = 'devils' AND mc.player_count = 1
+                      THEN 0 ELSE 1 END) AS games,
+             SUM(CASE WHEN m.mode = 'devils' AND mc.player_count = 1
+                      THEN 0
+                      WHEN mp.finishing_rank = 1 THEN 1
+                      ELSE 0 END) AS wins,
+             MAX(mp.final_score) AS best_score
          FROM match_players mp
          JOIN matches m ON m.id = mp.match_id
+         JOIN (SELECT match_id, COUNT(*) AS player_count
+               FROM match_players
+               GROUP BY match_id) mc ON mc.match_id = m.id
          WHERE mp.user_id = ?
          GROUP BY m.mode`,
         user.id,
@@ -931,10 +949,15 @@ export async function meMatches(request, env) {
 
     if (mode === 'devils') {
         // Devils — the existing simple query. finishing_rank is the
-        // player's place in that one match.
+        // player's place in that one match. player_count is the total
+        // participants, surfaced so the client can render solo runs
+        // (player_count=1) with a "--" rank instead of "1st" (a solo
+        // 1st place feels silly).
         const matches = await all(env,
             `SELECT m.id AS match_id, m.ended_at,
-                    mp.final_score, mp.finishing_rank
+                    mp.final_score, mp.finishing_rank,
+                    (SELECT COUNT(*) FROM match_players mp2
+                     WHERE mp2.match_id = m.id) AS player_count
              FROM match_players mp
              JOIN matches m ON m.id = mp.match_id
              WHERE mp.user_id = ? AND m.mode = ?

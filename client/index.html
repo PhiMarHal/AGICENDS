@@ -3020,14 +3020,20 @@
                 row.appendChild(date);
 
                 // Both modes get a rank cell now. Format differs:
-                //   Devils: finishing_rank as ordinal (1st, 2nd, …)
+                //   Devils: finishing_rank as ordinal (1st, 2nd, …),
+                //           but solo runs render as "—" since a 1st-of-1
+                //           finish isn't a meaningful ranking.
                 //   Angels: global_rank with # prefix (#1, #2, …)
                 const rank = document.createElement('span');
                 rank.className = 'profile-match-rank';
                 if (mode === 'devils') {
-                    rank.textContent = m.finishing_rank != null
-                        ? ordinal(m.finishing_rank)
-                        : '—';
+                    if (m.player_count === 1) {
+                        rank.textContent = '—';
+                    } else {
+                        rank.textContent = m.finishing_rank != null
+                            ? ordinal(m.finishing_rank)
+                            : '—';
+                    }
                 } else {
                     rank.textContent = m.global_rank != null
                         ? '#' + m.global_rank
@@ -3135,11 +3141,21 @@
         }
 
         function renderMatchDetail(data) {
+            // For Devils, solo runs (single player) get a "—" rank in
+            // both the header and the body row — finishing 1st-of-1
+            // isn't a meaningful ranking, mirroring the same dash
+            // shown in the match list.
+            const devilsSolo = data.mode === 'devils'
+                && Array.isArray(data.players)
+                && data.players.length === 1;
+
             // Header: rank + score, displayed differently per mode.
             if (data.mode === 'devils') {
-                matchDetailRankEl.textContent = data.my_finishing_rank != null
-                    ? ordinal(data.my_finishing_rank)
-                    : '—';
+                matchDetailRankEl.textContent = devilsSolo
+                    ? '—'
+                    : (data.my_finishing_rank != null
+                        ? ordinal(data.my_finishing_rank)
+                        : '—');
                 matchDetailScoreEl.textContent = (data.my_final_score != null
                     ? data.my_final_score
                     : '–') + ' pts';
@@ -3166,7 +3182,12 @@
 
                     const name = document.createElement('span');
                     name.className = 'name';
-                    const rankPrefix = p.finishing_rank != null ? '#' + p.finishing_rank + ' ' : '';
+                    // Drop the "#N " prefix entirely for solo runs —
+                    // ranking a list of one is silly. Multi-player runs
+                    // keep the prefix.
+                    const rankPrefix = (!devilsSolo && p.finishing_rank != null)
+                        ? '#' + p.finishing_rank + ' '
+                        : '';
                     name.textContent = rankPrefix + p.display_name;
                     row.appendChild(name);
 
