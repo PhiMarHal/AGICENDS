@@ -1,0 +1,1072 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CHARACTER · LAB — agiscends experimental</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0a0a;
+            --fg: #f1f1f1;
+            --dim: #525252;
+            --dim2: #8a8a8a;
+            --line: #222;
+            --line-hi: #383838;
+            --stage-bg: #ffffff;
+            --accent: #fff;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html,
+        body {
+            min-height: 100%;
+        }
+
+        body {
+            background-color: var(--bg);
+            background-image:
+                radial-gradient(ellipse at center top, #161616 0%, transparent 55%),
+                radial-gradient(circle, #1a1a1a 1.5px, transparent 1.5px);
+            background-size: auto, 26px 26px;
+            background-position: center top, center;
+            background-repeat: no-repeat, repeat;
+            color: var(--fg);
+            font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            min-height: 100vh;
+            padding: 30px 18px 80px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        /* HEADER ------------------------------------------------------------------ */
+        .header {
+            text-align: center;
+            margin-bottom: 28px;
+        }
+
+        .header .marks {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            font-size: 9.5px;
+            color: var(--dim2);
+            letter-spacing: 0.45em;
+            margin-bottom: 10px;
+        }
+
+        .header .marks .dot {
+            width: 6px;
+            height: 6px;
+            background: var(--fg);
+            border-radius: 50%;
+            animation: pulse 2.4s infinite ease-in-out;
+        }
+
+        .header .marks .dot.b {
+            animation-delay: 1.2s;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 0.25;
+                transform: scale(1);
+            }
+
+            50% {
+                opacity: 1;
+                transform: scale(1.15);
+            }
+        }
+
+        .header h1 {
+            font-size: 19px;
+            font-weight: 700;
+            letter-spacing: 0.46em;
+            padding-left: 0.46em;
+            /* compensate so it visually centers */
+        }
+
+        .header .sub {
+            font-size: 9.5px;
+            color: var(--dim2);
+            margin-top: 9px;
+            letter-spacing: 0.4em;
+        }
+
+        /* STAGE ------------------------------------------------------------------- */
+        .stage-wrap {
+            position: relative;
+            width: min(380px, 92vw);
+            aspect-ratio: 1;
+            margin-bottom: 10px;
+        }
+
+        .stage {
+            position: absolute;
+            inset: 0;
+            background: var(--stage-bg);
+            cursor: pointer;
+            overflow: hidden;
+        }
+
+        .stage svg {
+            position: relative;
+            z-index: 1;
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .stage-floor {
+            position: absolute;
+            bottom: 32px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 58%;
+            height: 18px;
+            background: radial-gradient(ellipse, rgba(0, 0, 0, 0.13), transparent 70%);
+            pointer-events: none;
+            border-radius: 50%;
+            z-index: 0;
+        }
+
+        /* corner brackets */
+        .bracket {
+            position: absolute;
+            width: 14px;
+            height: 14px;
+            border: 1px solid var(--dim);
+            pointer-events: none;
+            z-index: 2;
+        }
+
+        .bracket.tl {
+            top: -1px;
+            left: -1px;
+            border-right: none;
+            border-bottom: none;
+        }
+
+        .bracket.tr {
+            top: -1px;
+            right: -1px;
+            border-left: none;
+            border-bottom: none;
+        }
+
+        .bracket.bl {
+            bottom: -1px;
+            left: -1px;
+            border-right: none;
+            border-top: none;
+        }
+
+        .bracket.br {
+            bottom: -1px;
+            right: -1px;
+            border-left: none;
+            border-top: none;
+        }
+
+        /* scan effect on randomize */
+        .stage .scan-line {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 3;
+            opacity: 0;
+            background: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.18) 48%, rgba(0, 0, 0, 0.32) 50%, rgba(0, 0, 0, 0.18) 52%, transparent 100%);
+        }
+
+        .stage.scan .scan-line {
+            animation: scanLine 0.55s ease-out;
+        }
+
+        @keyframes scanLine {
+            0% {
+                transform: translateY(-100%);
+                opacity: 0;
+            }
+
+            20% {
+                opacity: 1;
+            }
+
+            100% {
+                transform: translateY(100%);
+                opacity: 0;
+            }
+        }
+
+        .helper {
+            font-size: 9.5px;
+            color: var(--dim2);
+            letter-spacing: 0.32em;
+            margin: 6px 0 22px;
+            text-align: center;
+        }
+
+        /* CONTROLS ---------------------------------------------------------------- */
+        .controls {
+            width: min(440px, 100%);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .row {
+            display: grid;
+            grid-template-columns: 82px 1fr 60px;
+            align-items: stretch;
+            height: 42px;
+            border-top: 1px solid var(--line);
+        }
+
+        .row:last-child {
+            border-bottom: 1px solid var(--line);
+        }
+
+        .row .label {
+            display: flex;
+            align-items: center;
+            padding-left: 4px;
+            font-size: 10.5px;
+            letter-spacing: 0.32em;
+            color: var(--dim2);
+        }
+
+        .row .picker {
+            display: grid;
+            grid-template-columns: 38px 1fr 38px;
+            align-items: stretch;
+            height: 100%;
+        }
+
+        .row .picker .arrow {
+            background: transparent;
+            border: none;
+            color: var(--dim2);
+            cursor: pointer;
+            font: inherit;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: color 0.12s ease, background 0.12s ease;
+        }
+
+        .row .picker .arrow:hover {
+            color: var(--accent);
+            background: var(--line);
+        }
+
+        .row .picker .arrow:active {
+            background: var(--fg);
+            color: var(--bg);
+        }
+
+        .row .value {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            font-weight: 500;
+            letter-spacing: 0.2em;
+            transition: opacity 0.15s ease;
+        }
+
+        .row .value.changing {
+            opacity: 0.35;
+        }
+
+        .row .idx {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding-right: 6px;
+            font-size: 10px;
+            color: var(--dim);
+            letter-spacing: 0.06em;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* ACTIONS ----------------------------------------------------------------- */
+        .actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 24px;
+        }
+
+        .actions button {
+            background: transparent;
+            border: 1px solid var(--line-hi);
+            color: var(--fg);
+            font: inherit;
+            font-size: 11px;
+            letter-spacing: 0.3em;
+            padding: 12px 22px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .actions button:hover {
+            background: var(--fg);
+            color: var(--bg);
+            border-color: var(--fg);
+        }
+
+        .actions button:active {
+            transform: translateY(1px);
+        }
+
+        /* TOAST ------------------------------------------------------------------- */
+        .toast {
+            position: fixed;
+            bottom: 28px;
+            left: 50%;
+            transform: translateX(-50%) translateY(16px);
+            background: var(--fg);
+            color: var(--bg);
+            padding: 10px 24px;
+            font-size: 10.5px;
+            letter-spacing: 0.3em;
+            opacity: 0;
+            transition: opacity 0.25s ease, transform 0.25s ease;
+            pointer-events: none;
+            z-index: 50;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        /* FOOTER ------------------------------------------------------------------ */
+        .footer {
+            position: fixed;
+            bottom: 10px;
+            right: 12px;
+            font-size: 9px;
+            color: var(--dim);
+            letter-spacing: 0.3em;
+            pointer-events: none;
+        }
+
+        @media (max-width: 480px) {
+            body {
+                padding-top: 22px;
+            }
+
+            .header h1 {
+                font-size: 16px;
+                letter-spacing: 0.4em;
+                padding-left: 0.4em;
+            }
+
+            .header .sub {
+                font-size: 9px;
+            }
+
+            .row {
+                grid-template-columns: 68px 1fr 52px;
+                height: 40px;
+            }
+
+            .row .label {
+                font-size: 9.5px;
+                letter-spacing: 0.26em;
+            }
+
+            .row .value {
+                font-size: 12px;
+                letter-spacing: 0.16em;
+            }
+
+            .actions button {
+                padding: 11px 16px;
+                font-size: 10.5px;
+                letter-spacing: 0.24em;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="header">
+        <div class="marks">
+            <span class="dot"></span>
+            <span>EXPERIMENTAL · v0.1</span>
+            <span class="dot b"></span>
+        </div>
+        <h1>CHARACTER · LAB</h1>
+        <div class="sub">agiscends / morphology bench</div>
+    </div>
+
+    <div class="stage-wrap">
+        <span class="bracket tl"></span>
+        <span class="bracket tr"></span>
+        <span class="bracket bl"></span>
+        <span class="bracket br"></span>
+        <div class="stage" id="stage">
+            <div class="stage-floor"></div>
+            <svg id="char-svg" viewBox="-150 -150 300 300" xmlns="http://www.w3.org/2000/svg"
+                preserveAspectRatio="xMidYMid meet">
+                <g id="char-group"></g>
+            </svg>
+            <div class="scan-line"></div>
+        </div>
+    </div>
+
+    <div class="helper">CLICK TO JUMP · MOVE CURSOR TO LOOK</div>
+
+    <div class="controls" id="controls"></div>
+
+    <div class="actions">
+        <button id="btn-random">RANDOMIZE</button>
+        <button id="btn-export">EXPORT JSON</button>
+    </div>
+
+    <div class="toast" id="toast"></div>
+    <div class="footer">SPEC · v0.1</div>
+
+    <script>
+        /* =============================================================================
+         * AGISCENDS · CHARACTER LAB
+         * -----------------------------------------------------------------------------
+         * Standalone, experimental. Single source of truth = the `state` config object.
+         *
+         * Integration sketch (Phaser side, future):
+         *   1. Persist `state` per player on the server (5 small string fields).
+         *   2. In the client, replicate each part's render() body using Phaser
+         *      Graphics primitives. Coordinates here are SVG-units in a 300x300
+         *      viewBox centered on (0,0), with a body radius of 100 — same proportions
+         *      as the existing game character (which uses 30 px radius). All visual
+         *      math is therefore a single uniform scale away from game-space.
+         *   3. The eye-tracking + squeeze logic in `tick()` maps directly onto the
+         *      existing per-frame visual update in the game (vx/vy → pupil offset).
+         * ============================================================================= */
+
+        // ---- helpers ---------------------------------------------------------------
+        function $(sel) { return document.querySelector(sel); }
+        function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+        function lerp(a, b, t) { return a + (b - a) * t; }
+        function rand(lo, hi) { return lo + Math.random() * (hi - lo); }
+        function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+        function easeInOutQuad(t) { return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
+        // damped overshoot, approximates Phaser's Elastic.easeOut
+        function easeOutElastic(t) {
+            if (t === 0 || t === 1) return t;
+            const c4 = (2 * Math.PI) / 3;
+            return Math.pow(2, -8 * t) * Math.sin((t * 8 - 0.75) * c4) + 1;
+        }
+
+        function starPath(cx, cy, outerR, innerR, points) {
+            let path = '';
+            for (let i = 0; i < points * 2; i++) {
+                const r = i % 2 === 0 ? outerR : innerR;
+                const ang = (i * Math.PI) / points - Math.PI / 2;
+                const x = cx + Math.cos(ang) * r;
+                const y = cy + Math.sin(ang) * r;
+                path += (i === 0 ? 'M ' : 'L ') + x.toFixed(2) + ' ' + y.toFixed(2) + ' ';
+            }
+            return path + 'Z';
+        }
+
+        function heartPath(cx, cy, size) {
+            const s = size;
+            return `M ${cx} ${cy + s * 0.75}
+          C ${cx - s * 1.5} ${cy - s * 0.05}, ${cx - s * 0.55} ${cy - s * 1.1}, ${cx} ${cy - s * 0.2}
+          C ${cx + s * 0.55} ${cy - s * 1.1}, ${cx + s * 1.5} ${cy - s * 0.05}, ${cx} ${cy + s * 0.75} Z`;
+        }
+
+        function spiralPath(cx, cy, maxR) {
+            let path = `M ${cx.toFixed(2)} ${cy.toFixed(2)}`;
+            const turns = 2.2;
+            const steps = 36;
+            for (let i = 1; i <= steps; i++) {
+                const t = i / steps;
+                const ang = t * turns * Math.PI * 2;
+                const r = t * maxR;
+                const x = cx + Math.cos(ang) * r;
+                const y = cy + Math.sin(ang) * r;
+                path += ` L ${x.toFixed(2)} ${y.toFixed(2)}`;
+            }
+            return path;
+        }
+
+        // ---- catalog ---------------------------------------------------------------
+        const STROKE = 3;
+        const BODY_R = 100;
+
+        const PARTS = {
+            // Patterns are rendered inside the body interior (clipped to the body circle).
+            // The body base is a solid black circle; the pattern adds white shapes on top.
+            // The final black outline is drawn last, after the pattern.
+            body: [
+                {
+                    id: 'solid', name: 'SOLID',
+                    pattern: ''
+                },
+                {
+                    id: 'spots', name: 'SPOTS',
+                    pattern: `
+        <circle cx="-52" cy="-32" r="20" fill="#fff"/>
+        <circle cx="44"  cy="-50" r="14" fill="#fff"/>
+        <circle cx="22"  cy="44"  r="24" fill="#fff"/>
+        <circle cx="-34" cy="52"  r="18" fill="#fff"/>
+        <circle cx="62"  cy="22"  r="11" fill="#fff"/>
+        <circle cx="-72" cy="18"  r="9"  fill="#fff"/>
+        <circle cx="-12" cy="-65" r="7"  fill="#fff"/>
+      `
+                },
+                {
+                    id: 'stripes', name: 'STRIPES',
+                    pattern: `
+        <rect x="-90" y="-110" width="22" height="220" fill="#fff"/>
+        <rect x="-44" y="-110" width="22" height="220" fill="#fff"/>
+        <rect x="2"   y="-110" width="22" height="220" fill="#fff"/>
+        <rect x="48"  y="-110" width="22" height="220" fill="#fff"/>
+      `
+                },
+                {
+                    id: 'half', name: 'HALF',
+                    // Right half white; the black outline still wraps the full circle.
+                    pattern: `<rect x="0" y="-110" width="120" height="220" fill="#fff"/>`
+                },
+                {
+                    id: 'check', name: 'CHECKERS',
+                    // Two opposite quadrants white -> checkered look inside the circle.
+                    pattern: `
+        <rect x="0"    y="-110" width="120" height="110" fill="#fff"/>
+        <rect x="-120" y="0"    width="120" height="110" fill="#fff"/>
+      `
+                },
+                {
+                    id: 'star', name: 'STAR',
+                    pattern: `<path d="${starPath(0, 4, 58, 23, 5)}" fill="#fff"/>`
+                },
+                {
+                    id: 'crescent', name: 'CRESCENT',
+                    pattern: `
+        <circle cx="-14" cy="0"   r="66" fill="#fff"/>
+        <circle cx="10"  cy="-10" r="58" fill="#000"/>
+      `
+                },
+                {
+                    id: 'cyclops', name: 'CYCLOPS',
+                    // The character has a third eye on its belly. Reused below: also a
+                    // proof-of-concept that arbitrary pattern markup composes cleanly.
+                    pattern: `
+        <ellipse cx="0" cy="18" rx="48" ry="33" fill="#fff" stroke="#000" stroke-width="3"/>
+        <circle  cx="0" cy="18" r="17" fill="#000"/>
+        <circle  cx="6" cy="11" r="5"  fill="#fff"/>
+      `
+                },
+            ],
+
+            // Eye whites. Render returns one eye's SVG; the mirror flag is provided
+            // for shapes that are asymmetric (e.g. almond), so left and right can
+            // mirror each other. pupilMax is the clamp range for pupil offset within
+            // this eye's interior — keeps the pupil from leaving the iris area.
+            eyes: [
+                {
+                    id: 'cat', name: 'CAT',
+                    render: (cx, cy) =>
+                        `<ellipse cx="${cx}" cy="${cy}" rx="36" ry="24" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>`,
+                    pupilMax: { x: 14, y: 8 }
+                },
+                {
+                    id: 'round', name: 'ROUND',
+                    render: (cx, cy) =>
+                        `<circle cx="${cx}" cy="${cy}" r="27" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>`,
+                    pupilMax: { x: 13, y: 13 }
+                },
+                {
+                    id: 'wide', name: 'WIDE',
+                    render: (cx, cy) =>
+                        `<circle cx="${cx}" cy="${cy}" r="34" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>`,
+                    pupilMax: { x: 18, y: 18 }
+                },
+                {
+                    id: 'almond', name: 'ALMOND',
+                    render: (cx, cy, mirror) =>
+                        `<ellipse cx="${cx}" cy="${cy}" rx="34" ry="20" fill="#fff" stroke="#000" stroke-width="${STROKE}" transform="rotate(${mirror ? -14 : 14} ${cx} ${cy})"/>`,
+                    pupilMax: { x: 12, y: 7 }
+                },
+                {
+                    id: 'sleepy', name: 'SLEEPY',
+                    // Eye whites are normal; the eyelid overlay is drawn AFTER pupils
+                    // (see overlay()), so pupils don't poke through the lid.
+                    render: (cx, cy) =>
+                        `<ellipse cx="${cx}" cy="${cy}" rx="36" ry="24" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>`,
+                    overlay: (cx, cy) =>
+                        `<path d="M ${cx - 37} ${cy - 1} A 36 24 0 0 1 ${cx + 37} ${cy - 1} L ${cx + 37} ${cy - 26} L ${cx - 37} ${cy - 26} Z" fill="#000"/>`,
+                    pupilMax: { x: 11, y: 3 }
+                },
+                {
+                    id: 'squint', name: 'SQUINT',
+                    render: (cx, cy) =>
+                        `<ellipse cx="${cx}" cy="${cy}" rx="34" ry="10" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>`,
+                    pupilMax: { x: 12, y: 2 }
+                },
+                {
+                    id: 'diamond', name: 'DIAMOND',
+                    render: (cx, cy) =>
+                        `<polygon points="${cx - 32},${cy} ${cx},${cy - 22} ${cx + 32},${cy} ${cx},${cy + 22}" fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>`,
+                    pupilMax: { x: 12, y: 9 }
+                },
+                {
+                    id: 'oval-tall', name: 'OVAL',
+                    render: (cx, cy) =>
+                        `<ellipse cx="${cx}" cy="${cy}" rx="22" ry="30" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>`,
+                    pupilMax: { x: 9, y: 15 }
+                },
+            ],
+
+            // Pupils are rendered at (0,0); their position is set via a translate()
+            // on the parent <g>, which the per-frame tick() updates for eye-tracking.
+            pupils: [
+                { id: 'slit', name: 'SLIT', render: (cx, cy) => `<rect x="${cx - 5}" y="${cy - 16}" width="10" height="32" fill="#000" rx="2"/>` },
+                { id: 'dot', name: 'DOT', render: (cx, cy) => `<circle cx="${cx}" cy="${cy}" r="6" fill="#000"/>` },
+                { id: 'dot-big', name: 'BIG DOT', render: (cx, cy) => `<circle cx="${cx}" cy="${cy}" r="11" fill="#000"/>` },
+                { id: 'square', name: 'SQUARE', render: (cx, cy) => `<rect x="${cx - 8}" y="${cy - 8}" width="16" height="16" fill="#000"/>` },
+                { id: 'heart', name: 'HEART', render: (cx, cy) => `<path d="${heartPath(cx, cy - 2, 10)}" fill="#000"/>` },
+                { id: 'star', name: 'STAR', render: (cx, cy) => `<path d="${starPath(cx, cy, 13, 5.5, 5)}" fill="#000"/>` },
+                { id: 'cross', name: 'CROSS', render: (cx, cy) => `<path d="M ${cx - 12} ${cy - 4} h 8 v -8 h 8 v 8 h 8 v 8 h -8 v 8 h -8 v -8 h -8 z" fill="#000"/>` },
+                { id: 'diamond', name: 'DIAMOND', render: (cx, cy) => `<polygon points="${cx - 9},${cy} ${cx},${cy - 13} ${cx + 9},${cy} ${cx},${cy + 13}" fill="#000"/>` },
+                { id: 'spiral', name: 'SPIRAL', render: (cx, cy) => `<path d="${spiralPath(cx, cy, 13)}" fill="none" stroke="#000" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>` },
+                { id: 'none', name: 'BLANK', render: () => '' },
+            ],
+
+            // Ears are drawn BEHIND the body so their inner edges are covered by the
+            // body's black fill — yielding a clean continuous silhouette where they
+            // meet the head. All ear shapes are solid-black silhouettes.
+            ears: [
+                { id: 'none', name: 'NONE', render: () => '' },
+                {
+                    id: 'cat', name: 'CAT',
+                    render: () => `
+        <polygon points="-82,-72 -55,-128 -28,-72" fill="#000" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+        <polygon points="82,-72 55,-128 28,-72" fill="#000" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>`
+                },
+                {
+                    id: 'fox', name: 'FOX',
+                    render: () => `
+        <polygon points="-86,-66 -62,-148 -38,-66" fill="#000" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+        <polygon points="86,-66 62,-148 38,-66" fill="#000" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>`
+                },
+                {
+                    id: 'bear', name: 'BEAR',
+                    render: () => `
+        <circle cx="-68" cy="-82" r="22" fill="#000" stroke="#000" stroke-width="${STROKE}"/>
+        <circle cx="68"  cy="-82" r="22" fill="#000" stroke="#000" stroke-width="${STROKE}"/>`
+                },
+                {
+                    id: 'floppy', name: 'FLOPPY',
+                    // Side ears hanging down — translate then rotate so the rotation is
+                    // about the attachment point rather than the ellipse center.
+                    render: () => `
+        <ellipse cx="0" cy="0" rx="22" ry="60" fill="#000" stroke="#000" stroke-width="${STROKE}" transform="translate(-94 20) rotate(18)"/>
+        <ellipse cx="0" cy="0" rx="22" ry="60" fill="#000" stroke="#000" stroke-width="${STROKE}" transform="translate(94 20)  rotate(-18)"/>`
+                },
+                {
+                    id: 'bunny', name: 'BUNNY',
+                    render: () => `
+        <ellipse cx="0" cy="0" rx="15" ry="48" fill="#000" stroke="#000" stroke-width="${STROKE}" transform="translate(-42 -128) rotate(-8)"/>
+        <ellipse cx="0" cy="0" rx="15" ry="48" fill="#000" stroke="#000" stroke-width="${STROKE}" transform="translate(42 -128)  rotate(8)"/>`
+                },
+                {
+                    id: 'devil', name: 'HORNS',
+                    render: () => `
+        <path d="M -78 -78 Q -94 -118 -52 -134 Q -68 -100 -52 -82 Z" fill="#000" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+        <path d="M 78 -78 Q 94 -118 52 -134 Q 68 -100 52 -82 Z" fill="#000" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>`
+                },
+                {
+                    id: 'elf', name: 'ELF',
+                    render: () => `
+        <path d="M -92 -28 Q -134 -64 -106 -90 Q -78 -78 -78 -34 Z" fill="#000" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+        <path d="M 92 -28 Q 134 -64 106 -90 Q 78 -78 78 -34 Z" fill="#000" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>`
+                },
+            ],
+
+            // Tails drawn behind the body. Single-side (right) since the character
+            // has no notion of facing yet — easy to mirror later if needed.
+            tail: [
+                { id: 'none', name: 'NONE', render: () => '' },
+                {
+                    id: 'cat', name: 'CAT',
+                    render: () => `
+        <path d="M 78 64 Q 142 80 148 14 Q 144 -38 96 -10 Q 84 4 102 18"
+              fill="none" stroke="#000" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>`
+                },
+                {
+                    id: 'straight', name: 'STRAIGHT',
+                    render: () => `<path d="M 70 70 Q 124 76 142 28" fill="none" stroke="#000" stroke-width="14" stroke-linecap="round"/>`
+                },
+                {
+                    id: 'fox', name: 'FOX',
+                    render: () => `
+        <path d="M 76 70 Q 130 88 140 24" fill="none" stroke="#000" stroke-width="22" stroke-linecap="round"/>
+        <circle cx="138" cy="20" r="19" fill="#000"/>`
+                },
+                {
+                    id: 'devil', name: 'DEVIL',
+                    render: () => `
+        <path d="M 72 78 Q 124 96 142 46" fill="none" stroke="#000" stroke-width="9" stroke-linecap="round"/>
+        <polygon points="152,32 128,48 144,60" fill="#000"/>`
+                },
+                {
+                    id: 'puff', name: 'PUFF',
+                    render: () => `<circle cx="100" cy="82" r="20" fill="#000" stroke="#000" stroke-width="${STROKE}"/>`
+                },
+                {
+                    id: 'lizard', name: 'LIZARD',
+                    render: () => `<path d="M 60 84 Q 132 112 158 54 Q 150 18 162 -6" fill="none" stroke="#000" stroke-width="8" stroke-linecap="round"/>`
+                },
+                {
+                    id: 'curl', name: 'CURL',
+                    render: () => `
+        <path d="M 76 70 Q 124 80 144 32 Q 158 -18 116 -22 Q 86 -10 110 6 Q 130 10 124 -8"
+              fill="none" stroke="#000" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>`
+                },
+            ],
+        };
+
+        // ---- state (single source of truth) ----------------------------------------
+        const state = {
+            body: 'solid',
+            eyes: 'cat',
+            pupils: 'slit',
+            ears: 'none',
+            tail: 'none',
+        };
+
+        const CATEGORIES = [
+            { key: 'body', label: 'BODY' },
+            { key: 'eyes', label: 'EYES' },
+            { key: 'pupils', label: 'PUPILS' },
+            { key: 'ears', label: 'EARS' },
+            { key: 'tail', label: 'TAIL' },
+        ];
+
+        function partsOf(category) { return PARTS[category]; }
+        function getIndex(category) { return PARTS[category].findIndex(p => p.id === state[category]); }
+        function setByIndex(category, idx) {
+            const arr = PARTS[category];
+            const i = ((idx % arr.length) + arr.length) % arr.length;
+            state[category] = arr[i].id;
+        }
+
+        // ---- DOM refs cached after each rebuild -----------------------------------
+        let charGroup, eyesGroup, pupilL, pupilR;
+
+        // ---- render ---------------------------------------------------------------
+        const EYE_CX = 40;   // |x| offset of each eye from body center
+        const EYE_CY = -7;   // y offset of eyes from body center
+
+        function rebuild() {
+            const bodyPart = partsOf('body').find(p => p.id === state.body);
+            const eyesPart = partsOf('eyes').find(p => p.id === state.eyes);
+            const pupilsPart = partsOf('pupils').find(p => p.id === state.pupils);
+            const earsPart = partsOf('ears').find(p => p.id === state.ears);
+            const tailPart = partsOf('tail').find(p => p.id === state.tail);
+
+            const overlayLeft = eyesPart.overlay ? eyesPart.overlay(-EYE_CX, EYE_CY, false) : '';
+            const overlayRight = eyesPart.overlay ? eyesPart.overlay(EYE_CX, EYE_CY, true) : '';
+
+            charGroup.innerHTML = `
+    <defs>
+      <clipPath id="body-clip">
+        <circle cx="0" cy="0" r="${BODY_R - 0.5}"/>
+      </clipPath>
+    </defs>
+
+    <g class="tail">${tailPart.render()}</g>
+    <g class="ears">${earsPart.render()}</g>
+
+    <!-- body: base fill, pattern (clipped), then outline on top -->
+    <circle cx="0" cy="0" r="${BODY_R}" fill="#000"/>
+    <g clip-path="url(#body-clip)">${bodyPart.pattern}</g>
+    <circle cx="0" cy="0" r="${BODY_R}" fill="none" stroke="#000" stroke-width="${STROKE}"/>
+
+    <!-- eyes: whites, pupils (positioned by translate), optional overlay (eyelid) -->
+    <g class="eyes" id="eyes-group">
+      ${eyesPart.render(-EYE_CX, EYE_CY, false)}
+      ${eyesPart.render(EYE_CX, EYE_CY, true)}
+      <g id="pupil-left"  transform="translate(${-EYE_CX} ${EYE_CY})">${pupilsPart.render(0, 0)}</g>
+      <g id="pupil-right" transform="translate(${EYE_CX} ${EYE_CY})">${pupilsPart.render(0, 0)}</g>
+      ${overlayLeft}${overlayRight}
+    </g>
+  `;
+
+            eyesGroup = document.getElementById('eyes-group');
+            pupilL = document.getElementById('pupil-left');
+            pupilR = document.getElementById('pupil-right');
+        }
+
+        // ---- animation state -------------------------------------------------------
+        const eyeAnim = {
+            current: { x: 0, y: 0 },
+            target: { x: 0, y: 0 },
+            mouseTarget: null,     // {x,y} when cursor is on the page
+            idleTarget: { x: 0, y: 0 },
+            nextIdleAt: 0,
+        };
+
+        const blinkAnim = {
+            amount: 0,             // 0 = open, 1 = closed
+            state: 'open',
+            nextBlinkAt: 0,
+            phaseStart: 0,
+        };
+
+        const squeezeAnim = {
+            active: false,
+            startTime: 0,
+            // 3-phase juice taken from the game's playFlapJuice():
+            // 1) stretch tall, 2) squash wide, 3) settle with elastic.
+            phases: [
+                { dur: 120, sx: 0.65, sy: 1.55, ang: 0, ease: easeOutCubic },
+                { dur: 180, sx: 1.28, sy: 0.80, ang: 0, ease: easeInOutQuad },
+                { dur: 420, sx: 1.00, sy: 1.00, ang: 0, ease: easeOutElastic },
+            ],
+            totalDur: 0,
+            slant: 0,
+        };
+        squeezeAnim.totalDur = squeezeAnim.phases.reduce((a, p) => a + p.dur, 0);
+
+        function triggerSqueeze() {
+            if (squeezeAnim.active) return;            // ignore re-triggers mid-anim
+            squeezeAnim.active = true;
+            squeezeAnim.startTime = performance.now();
+            squeezeAnim.slant = (Math.random() - 0.5) * 22;  // ±11°
+        }
+
+        // ---- per-frame tick --------------------------------------------------------
+        function tick(now) {
+            // Eye target ---------------------------------------------------------------
+            if (eyeAnim.mouseTarget) {
+                eyeAnim.target.x = eyeAnim.mouseTarget.x;
+                eyeAnim.target.y = eyeAnim.mouseTarget.y;
+            } else {
+                if (now >= eyeAnim.nextIdleAt) {
+                    eyeAnim.idleTarget = { x: rand(-1, 1) * 14, y: rand(-1, 1) * 10 };
+                    eyeAnim.nextIdleAt = now + rand(1500, 3500);
+                }
+                eyeAnim.target.x = eyeAnim.idleTarget.x;
+                eyeAnim.target.y = eyeAnim.idleTarget.y;
+            }
+            eyeAnim.current.x += (eyeAnim.target.x - eyeAnim.current.x) * 0.18;
+            eyeAnim.current.y += (eyeAnim.target.y - eyeAnim.current.y) * 0.18;
+
+            const eyesPart = partsOf('eyes').find(p => p.id === state.eyes);
+            const px = clamp(eyeAnim.current.x, -eyesPart.pupilMax.x, eyesPart.pupilMax.x);
+            const py = clamp(eyeAnim.current.y, -eyesPart.pupilMax.y, eyesPart.pupilMax.y);
+            if (pupilL) pupilL.setAttribute('transform', `translate(${(-EYE_CX + px).toFixed(2)} ${(EYE_CY + py).toFixed(2)})`);
+            if (pupilR) pupilR.setAttribute('transform', `translate(${(EYE_CX + px).toFixed(2)} ${(EYE_CY + py).toFixed(2)})`);
+
+            // Blink state machine ------------------------------------------------------
+            if (blinkAnim.state === 'open') {
+                if (now >= blinkAnim.nextBlinkAt) { blinkAnim.state = 'closing'; blinkAnim.phaseStart = now; }
+            } else if (blinkAnim.state === 'closing') {
+                const t = (now - blinkAnim.phaseStart) / 80;
+                blinkAnim.amount = clamp(t, 0, 1);
+                if (t >= 1) { blinkAnim.state = 'opening'; blinkAnim.phaseStart = now; }
+            } else if (blinkAnim.state === 'opening') {
+                const t = (now - blinkAnim.phaseStart) / 120;
+                blinkAnim.amount = clamp(1 - t, 0, 1);
+                if (t >= 1) {
+                    blinkAnim.amount = 0;
+                    blinkAnim.state = 'open';
+                    blinkAnim.nextBlinkAt = now + rand(3500, 7000);
+                }
+            }
+            if (eyesGroup) {
+                const blinkScale = 1 - blinkAnim.amount * 0.94;
+                eyesGroup.setAttribute('transform', `translate(0 ${EYE_CY}) scale(1 ${blinkScale}) translate(0 ${-EYE_CY})`);
+            }
+
+            // Squeeze (full-body juice) ------------------------------------------------
+            if (squeezeAnim.active) {
+                const elapsed = now - squeezeAnim.startTime;
+                if (elapsed >= squeezeAnim.totalDur) {
+                    charGroup.removeAttribute('transform');
+                    squeezeAnim.active = false;
+                } else {
+                    // Find current phase, compute eased local t, lerp from prev to current.
+                    let acc = 0;
+                    let sx = 1, sy = 1, ang = 0;
+                    let prevSx = 1, prevSy = 1, prevAng = 0;
+                    for (let i = 0; i < squeezeAnim.phases.length; i++) {
+                        const p = squeezeAnim.phases[i];
+                        if (elapsed < acc + p.dur) {
+                            const localT = p.ease((elapsed - acc) / p.dur);
+                            sx = lerp(prevSx, p.sx, localT);
+                            sy = lerp(prevSy, p.sy, localT);
+                            ang = lerp(prevAng, p.ang, localT);
+                            break;
+                        }
+                        acc += p.dur;
+                        prevSx = p.sx; prevSy = p.sy; prevAng = p.ang;
+                    }
+                    // Apply a small per-frame slant during phases 1 & 2; phase 3 returns to 0.
+                    const slantNow = elapsed < squeezeAnim.phases[0].dur + squeezeAnim.phases[1].dur
+                        ? squeezeAnim.slant * (elapsed < squeezeAnim.phases[0].dur ? 1 : -0.5)
+                        : 0;
+                    charGroup.setAttribute('transform', `scale(${sx.toFixed(3)} ${sy.toFixed(3)}) rotate(${slantNow.toFixed(2)})`);
+                }
+            }
+
+            requestAnimationFrame(tick);
+        }
+
+        // ---- UI wiring ------------------------------------------------------------
+        function buildControls() {
+            const root = $('#controls');
+            root.innerHTML = '';
+            for (const cat of CATEGORIES) {
+                const row = document.createElement('div');
+                row.className = 'row';
+                row.dataset.category = cat.key;
+                row.innerHTML = `
+      <div class="label">${cat.label}</div>
+      <div class="picker">
+        <button class="arrow prev" aria-label="Previous ${cat.label.toLowerCase()}">&lt;</button>
+        <div class="value"></div>
+        <button class="arrow next" aria-label="Next ${cat.label.toLowerCase()}">&gt;</button>
+      </div>
+      <div class="idx"></div>
+    `;
+                row.querySelector('.prev').addEventListener('click', () => step(cat.key, -1));
+                row.querySelector('.next').addEventListener('click', () => step(cat.key, +1));
+                root.appendChild(row);
+            }
+            refreshControls();
+        }
+
+        function refreshControls() {
+            for (const cat of CATEGORIES) {
+                const row = document.querySelector(`.row[data-category="${cat.key}"]`);
+                const arr = partsOf(cat.key);
+                const idx = getIndex(cat.key);
+                row.querySelector('.value').textContent = arr[idx].name;
+                row.querySelector('.idx').textContent =
+                    String(idx + 1).padStart(2, '0') + '/' + String(arr.length).padStart(2, '0');
+            }
+        }
+
+        function step(category, dir) {
+            const row = document.querySelector(`.row[data-category="${category}"] .value`);
+            if (row) {
+                row.classList.add('changing');
+                setTimeout(() => row.classList.remove('changing'), 80);
+            }
+            setByIndex(category, getIndex(category) + dir);
+            refreshControls();
+            rebuild();
+        }
+
+        function randomize() {
+            for (const cat of CATEGORIES) {
+                setByIndex(cat.key, Math.floor(Math.random() * partsOf(cat.key).length));
+            }
+            refreshControls();
+            rebuild();
+            // Visual flourish: scan line across the stage + a small body squeeze.
+            const st = $('#stage');
+            st.classList.remove('scan');
+            void st.offsetWidth;       // reflow so the animation can replay
+            st.classList.add('scan');
+            setTimeout(() => st.classList.remove('scan'), 600);
+            triggerSqueeze();
+        }
+
+        function exportJson() {
+            const text = JSON.stringify(state);
+            const fallback = () => {
+                // Last resort: select-and-copy via a hidden textarea.
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                let ok = false;
+                try { ok = document.execCommand('copy'); } catch (e) { }
+                document.body.removeChild(ta);
+                showToast(ok ? 'CONFIG COPIED' : 'COPY FAILED · SEE CONSOLE');
+            };
+            if (navigator.clipboard?.writeText) {
+                navigator.clipboard.writeText(text).then(
+                    () => showToast('CONFIG COPIED'),
+                    fallback
+                );
+            } else {
+                fallback();
+            }
+            console.log('[CHARACTER LAB] config:', text);
+        }
+
+        let toastTimeout;
+        function showToast(message) {
+            const t = $('#toast');
+            t.textContent = message;
+            t.classList.add('show');
+            clearTimeout(toastTimeout);
+            toastTimeout = setTimeout(() => t.classList.remove('show'), 1800);
+        }
+
+        // ---- input -----------------------------------------------------------------
+        function setupInteractions() {
+            const stage = $('#stage');
+            stage.addEventListener('click', triggerSqueeze);
+
+            // Window-wide cursor tracking — eyes follow the cursor even when it's
+            // over the controls. On mobile, mouseTarget stays null and the idle
+            // look-around loop drives the eyes instead.
+            window.addEventListener('mousemove', (e) => {
+                const rect = stage.getBoundingClientRect();
+                const cx = rect.left + rect.width / 2;
+                const cy = rect.top + rect.height / 2;
+                const dx = e.clientX - cx;
+                const dy = e.clientY - cy;
+                const norm = clamp(Math.hypot(dx, dy) / 240, 0, 1);
+                const ang = Math.atan2(dy, dx);
+                eyeAnim.mouseTarget = {
+                    x: Math.cos(ang) * norm * 18,
+                    y: Math.sin(ang) * norm * 14,
+                };
+            });
+            window.addEventListener('mouseleave', () => { eyeAnim.mouseTarget = null; });
+            window.addEventListener('blur', () => { eyeAnim.mouseTarget = null; });
+        }
+
+        // ---- boot ------------------------------------------------------------------
+        charGroup = document.getElementById('char-group');
+        buildControls();
+        rebuild();
+        setupInteractions();
+        $('#btn-random').addEventListener('click', randomize);
+        $('#btn-export').addEventListener('click', exportJson);
+        blinkAnim.nextBlinkAt = performance.now() + rand(2500, 4500);
+        eyeAnim.nextIdleAt = performance.now() + rand(800, 2000);
+        requestAnimationFrame(tick);
+    </script>
+</body>
+
+</html>

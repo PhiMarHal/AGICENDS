@@ -887,8 +887,31 @@ export async function meProfile(request, env) {
         }
     }
 
+    // Peak MMR — lifetime best, never decreases. Queried separately
+    // from requireAuth's user fetch so endpoints that don't need it
+    // don't pay for the column reference. We also fall back to the
+    // current MMR if the column isn't there yet (the schema migration
+    // adding peak_mmr hasn't been run against this DB) so meProfile
+    // doesn't 500 on pre-migration deployments — the client just sees
+    // peak == current until the column lands.
+    let peakMmr = user.mmr;
+    try {
+        const row = await one(env,
+            'SELECT peak_mmr FROM users WHERE id = ?',
+            user.id,
+        );
+        if (row && row.peak_mmr != null) peakMmr = row.peak_mmr;
+    } catch (err) {
+        console.warn('peak_mmr lookup failed (column may not exist yet):', err.message);
+    }
+
     return json({
-        user: { id: user.id, display_name: user.display_name, mmr: user.mmr },
+        user: {
+            id: user.id,
+            display_name: user.display_name,
+            mmr: user.mmr,
+            peak_mmr: peakMmr,
+        },
         has_password: hasBespoke,
         wallet_address: ethRow ? ethRow.external_id : null,
         stats,

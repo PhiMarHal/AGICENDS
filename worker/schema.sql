@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS users (
     display_name    TEXT    NOT NULL COLLATE NOCASE,
     status          TEXT    NOT NULL DEFAULT 'active',
     mmr             INTEGER NOT NULL DEFAULT 1500,             -- pairwise-Elo skill rating
+    peak_mmr        INTEGER NOT NULL DEFAULT 1500,             -- lifetime peak (never decreases)
     created_at      INTEGER NOT NULL                          -- unix epoch ms
 );
 

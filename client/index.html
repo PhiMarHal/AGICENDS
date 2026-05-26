@@ -612,11 +612,46 @@
         }
 
         .profile-stat-line {
+            display: flex;
+            justify-content: space-between;
             color: #ccc;
             padding: 1px 0;
         }
 
+        .profile-stat-line .k {
+            color: #ccc;
+        }
+
         .profile-stat-line .v {
+            color: #fff;
+        }
+
+        /* Footer row directly under the two stat boxes — one cell per
+           box, each cell internally flex-spaced so its label sits left
+           and value sits right (mirroring the stat lines inside the
+           boxes). The 0 10px horizontal padding matches the boxes'
+           inner padding so labels and values align vertically with the
+           lines above. */
+        #profile-stats-footer {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+            font-size: 12px;
+        }
+
+        .profile-stats-footer-cell {
+            flex: 1;
+            display: flex;
+            justify-content: space-between;
+            padding: 0 10px;
+        }
+
+        .profile-stats-footer-cell .k {
+            color: #888;
+            letter-spacing: 1px;
+        }
+
+        .profile-stats-footer-cell .v {
             color: #fff;
         }
 
@@ -1587,14 +1622,37 @@
             <div id="profile-stats-grid">
                 <div class="profile-stats-box">
                     <div class="profile-stats-title">DEVILS</div>
-                    <div class="profile-stat-line">games <span class="v" id="profile-devils-games">0</span></div>
-                    <div class="profile-stat-line">wins <span class="v" id="profile-devils-wins">0</span></div>
-                    <div class="profile-stat-line">best <span class="v" id="profile-devils-best">–</span></div>
+                    <div class="profile-stat-line">
+                        <span class="k">played</span>
+                        <span class="v" id="profile-devils-games">0</span>
+                    </div>
+                    <div class="profile-stat-line">
+                        <span class="k">wins</span>
+                        <span class="v" id="profile-devils-wins">0</span>
+                    </div>
                 </div>
                 <div class="profile-stats-box">
                     <div class="profile-stats-title">ANGELS</div>
-                    <div class="profile-stat-line">games <span class="v" id="profile-angels-games">0</span></div>
-                    <div class="profile-stat-line">best <span class="v" id="profile-angels-best">–</span></div>
+                    <div class="profile-stat-line">
+                        <span class="k">played</span>
+                        <span class="v" id="profile-angels-games">0</span>
+                    </div>
+                    <div class="profile-stat-line">
+                        <span class="k">best</span>
+                        <span class="v" id="profile-angels-best">–</span>
+                    </div>
+                </div>
+            </div>
+            <!-- Footer row beneath the two stat boxes — TOP MMR aligns
+                 under DEVILS, TOP SCORE under ANGELS. -->
+            <div id="profile-stats-footer">
+                <div class="profile-stats-footer-cell">
+                    <span class="k">TOP MMR</span>
+                    <span class="v" id="profile-top-mmr">–</span>
+                </div>
+                <div class="profile-stats-footer-cell">
+                    <span class="k">TOP SCORE</span>
+                    <span class="v" id="profile-top-score">–</span>
                 </div>
             </div>
 
@@ -1971,6 +2029,28 @@
                 btnEl.textContent = 'Log in';
                 if (mmrEl) mmrEl.style.display = 'none';
                 if (profileEl) profileEl.style.display = 'none';
+            }
+
+            // If the onboarding overlay is currently on step 3 (mode
+            // pick) and the player-name slot is visible, settle it
+            // with the now-known identity. On page refresh, the
+            // overlay mounts before ensureAuthState() resolves — at
+            // that moment currentUser is null and the slot reads the
+            // loading-dots animation (if a token was present) or
+            // "anonymous" (if not). Once auth resolves and this
+            // function runs, we patch the label in place.
+            //
+            // Looked up via getElementById rather than the const ref
+            // (`onbPlayerName`) because that const is declared further
+            // down the script and would be in the temporal dead zone
+            // if updateMenuFromAuth ever ran before its block. Cheap
+            // and safe either way.
+            const onbName = document.getElementById('onboarding-player-name');
+            if (onbName && onbName.classList.contains('show')) {
+                stopOnbPlayerNameLoading();
+                onbName.textContent = currentUser
+                    ? currentUser.display_name
+                    : 'anonymous';
             }
         }
 
@@ -2376,6 +2456,33 @@
         let onbName = '';
         // Which step is currently active.
         let onbStep = null;
+        // Interval handle for the loading-dots animation that runs in
+        // the step-3 player-name slot while ensureAuthState() is in
+        // flight. Null when nothing is animating.
+        let onbLoadingInterval = null;
+
+        // Loading-dots animation for the player-name slot. Cycles
+        // through "-", "--", "---", "----" every 250ms — slow enough
+        // to feel intentional, fast enough that several frames play
+        // before a typical auth resolve. Same minimalist gray as the
+        // resolved "anonymous"/display_name text since it just edits
+        // the textContent in place.
+        function startOnbPlayerNameLoading() {
+            stopOnbPlayerNameLoading();  // idempotent
+            const frames = ['-', '--', '---', '----'];
+            let i = 0;
+            onbPlayerName.textContent = frames[0];
+            onbLoadingInterval = setInterval(() => {
+                i = (i + 1) % frames.length;
+                onbPlayerName.textContent = frames[i];
+            }, 250);
+        }
+        function stopOnbPlayerNameLoading() {
+            if (onbLoadingInterval) {
+                clearInterval(onbLoadingInterval);
+                onbLoadingInterval = null;
+            }
+        }
 
         // The bottom action slot shows either the NEXT button, an
         // error line, or nothing. These two helpers keep the two
@@ -2401,6 +2508,10 @@
             onbSkipLink.classList.remove('show');
             onbBackLink.classList.remove('show');
             onbPlayerName.classList.remove('show');
+            // Any animation from a previous step-3 mount needs to
+            // stop — leaving the interval running would keep mutating
+            // the (hidden) element's textContent unnecessarily.
+            stopOnbPlayerNameLoading();
 
             if (step === 'name') {
                 onbStepName.classList.add('active');
@@ -2414,15 +2525,20 @@
                 setTimeout(() => onbPasswordInput.focus(), 0);
             } else if (step === 'mode') {
                 onbStepMode.classList.add('active');
-                // No NEXT here — picking DEVIL or ANGEL is the action.
-                // Show the player identity at the bottom: display_name
-                // if logged in, "anonymous" otherwise. (The real session
-                // ID isn't assigned until we connect, which happens on
-                // mode pick — so before then we can only show
-                // "anonymous" for unauthed users.)
-                onbPlayerName.textContent = currentUser
-                    ? currentUser.display_name
-                    : 'anonymous';
+                // Three-way decision for the player-name slot:
+                //   • currentUser set         → show display_name (instant)
+                //   • token present, no user  → loading dots until
+                //     ensureAuthState() resolves and patches the slot
+                //     via updateMenuFromAuth()
+                //   • no token at all         → "anonymous" (no auth
+                //     in flight to wait for)
+                if (currentUser) {
+                    onbPlayerName.textContent = currentUser.display_name;
+                } else if (getStoredToken()) {
+                    startOnbPlayerNameLoading();
+                } else {
+                    onbPlayerName.textContent = 'anonymous';
+                }
                 onbPlayerName.classList.add('show');
             }
         }
@@ -2563,6 +2679,7 @@
         // so initial-load and mid-session mode changes share code.
         onbModeButtons.forEach(btn => {
             btn.addEventListener('click', () => {
+                stopOnbPlayerNameLoading();
                 onboardingOverlay.classList.remove('open');
                 selectMode(btn.dataset.mode);
             });
@@ -2606,9 +2723,10 @@
         // Stats
         const profDevilsGames = document.getElementById('profile-devils-games');
         const profDevilsWins = document.getElementById('profile-devils-wins');
-        const profDevilsBest = document.getElementById('profile-devils-best');
         const profAngelsGames = document.getElementById('profile-angels-games');
         const profAngelsBest = document.getElementById('profile-angels-best');
+        const profTopMmr = document.getElementById('profile-top-mmr');
+        const profTopScore = document.getElementById('profile-top-score');
 
         // Match history
         const profileModeBtns = document.querySelectorAll('.profile-mode-btn');
@@ -2797,11 +2915,20 @@
 
                 profDevilsGames.textContent = data.stats.devils.games;
                 profDevilsWins.textContent = data.stats.devils.wins;
-                profDevilsBest.textContent = data.stats.devils.best_score != null
-                    ? data.stats.devils.best_score : '–';
                 profAngelsGames.textContent = data.stats.angels.games;
                 profAngelsBest.textContent = data.stats.angels.best_score != null
                     ? data.stats.angels.best_score : '–';
+
+                // Footer row: peak MMR (lifetime best, never drops) and
+                // top score (max final_score across BOTH modes — a solo
+                // Devils run can therefore show up here even though it
+                // sits in Devils history without an MMR change).
+                profTopMmr.textContent = data.user.peak_mmr != null
+                    ? data.user.peak_mmr : 1500;
+                const devBest = data.stats.devils.best_score;
+                const angBest = data.stats.angels.best_score;
+                const top = Math.max(devBest || 0, angBest || 0);
+                profTopScore.textContent = top > 0 ? top : '–';
 
                 profileHasPassword = !!data.has_password;
                 profilePwStatus.textContent = profileHasPassword ? 'Enabled' : 'Disabled';

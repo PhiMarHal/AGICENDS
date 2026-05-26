@@ -161,8 +161,12 @@ async function updateMmrForMatch(env, players) {
         result[uid] = { delta: rounded, new_mmr: newMmr };
         if (rounded !== 0) {
             updateStmts.push(
-                env.DB.prepare('UPDATE users SET mmr = mmr + ? WHERE id = ?')
-                    .bind(rounded, uid)
+                // peak_mmr only ever moves up — SQLite's scalar MAX
+                // keeps the lifetime peak when this rating change is
+                // a drop. Atomic with the mmr update.
+                env.DB.prepare(
+                    'UPDATE users SET mmr = ?, peak_mmr = MAX(peak_mmr, ?) WHERE id = ?'
+                ).bind(newMmr, newMmr, uid)
             );
         }
     }
