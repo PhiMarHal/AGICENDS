@@ -523,6 +523,10 @@ function resetPlayer(p) {
     p.lastStunTime = -Infinity;
     p.inRound = false;
     p.deathTime = null;          // match.elapsedMs at moment of death; null while alive
+    p.roundJoinIndex = null;     // 0-based order of this player in match.readyPlayers at
+    // round start; used as a tertiary tiebreaker when two
+    // Devils players die at the same elapsedMs with the same
+    // score. Earlier joiner (lower index) wins.
 }
 
 function makeMatch() {
@@ -723,9 +727,20 @@ function step(match, deltaSeconds) {
         generateChunks(match.world, startY - SIM.CANVAS_HEIGHT * 1.5, match.elapsedMs);
 
         if (match.elapsedMs >= match.countdownEndsAtMs) {
+            // Snapshot round-join order from readyPlayers' insertion
+            // order (JS Sets preserve insertion order, so iterating
+            // gives us the chronological sequence of READY clicks).
+            // The index becomes a stable tertiary tiebreaker for the
+            // exact-same-tick exact-same-score death scenario in
+            // recordMatchResults below.
+            let joinIdx = 0;
+            const joinIndexById = new Map();
+            for (const id of match.readyPlayers) joinIndexById.set(id, joinIdx++);
+
             // Assign participation based on who clicked READY in time.
             for (const [id, p] of match.players) {
                 p.inRound = match.readyPlayers.has(id);
+                p.roundJoinIndex = joinIndexById.has(id) ? joinIndexById.get(id) : null;
             }
 
             if (!anyInRound(match)) {
@@ -1140,12 +1155,28 @@ function buildSnapshot(match) {
     // Only include round participants in the final scoreboard.
     // In Angels every in-round player shares the team score, which yields
     // dense rank=1 across the team after the sort below.
-    const finalScores = [];
+    //
+    // Devils-only: at ROUND_OVER, apply the same score tiebreaker
+    // used by recordMatchResults so the client's victory screen
+    // matches what's recorded to Profile / leaderboard. During play
+    // (RUNNING) the live scoreboard keeps showing raw scores — the
+    // tiebreak is a finalization step, not a live-display step.
+    const isAngelsMode = match.mode === 'angels';
+    const inRoundList = [];
+    const scoreFor = new Map();
     for (const p of match.players.values()) {
         if (!p.inRound) continue;
-        const score = match.mode === 'angels' ? match.teamScore : p.score;
-        finalScores.push({ id: p.id, displayName: p.displayName, score });
+        inRoundList.push(p);
+        scoreFor.set(p, isAngelsMode ? match.teamScore : p.score);
     }
+    if (match.roundState === ROUND_OVER && !isAngelsMode) {
+        applyDevilsScoreTiebreakers(inRoundList, scoreFor);
+    }
+    const finalScores = inRoundList.map(p => ({
+        id: p.id,
+        displayName: p.displayName,
+        score: scoreFor.get(p),
+    }));
     finalScores.sort((a, b) => b.score - a.score);
 
     let countdownRemainingMs = 0;
@@ -1260,6 +1291,56 @@ async function verifyAuthToken(token) {
     return null;
 }
 
+// Break exact-score ties among Devils players by giving later-diers a
+// small bonus over earlier-diers (+0, +1, +2, … within a tie group, in
+// ascending order of deathTime). For simultaneous deaths within a tie,
+// the secondary sort puts later-joiners earlier in the tiebreak order
+// — which means earlier-joiners end up last and get the largest boost.
+// That's the "small reward for sticking it out from round start" rule.
+//
+// Iterates until no ties remain. A +1 bump can land on an adjacent
+// player's score, requiring another pass to break the new tie. With
+// the current scoring (+4 per interval crossed) cascades are very
+// rare, but the loop ensures correctness regardless.
+//
+// Operates on a scoreFor Map<player, score> so we never mutate the
+// player.score field on the live state — the round-over UI is still
+// driving off match.players for a couple of seconds after this runs.
+function applyDevilsScoreTiebreakers(players, scoreFor) {
+    let didMutate;
+    do {
+        didMutate = false;
+        const byScore = new Map();
+        for (const p of players) {
+            const s = scoreFor.get(p);
+            if (!byScore.has(s)) byScore.set(s, []);
+            byScore.get(s).push(p);
+        }
+        for (const group of byScore.values()) {
+            if (group.length < 2) continue;
+            group.sort((a, b) => {
+                // Primary: earlier deathTime first (gets original score).
+                if (a.deathTime !== b.deathTime) return a.deathTime - b.deathTime;
+                // Secondary: later joinIndex first, so the earliest joiner
+                // sorts last in the tiebreak order and is rewarded.
+                if (a.roundJoinIndex !== b.roundJoinIndex) return b.roundJoinIndex - a.roundJoinIndex;
+                // Tertiary fallback for full determinism if both deathTime
+                // and joinIndex coincide — shouldn't happen in practice
+                // since joinIndex is unique within a round, but defensive.
+                return a.id.localeCompare(b.id);
+            });
+            const base = scoreFor.get(group[0]);
+            for (let i = 1; i < group.length; i++) {
+                const after = base + i;
+                if (scoreFor.get(group[i]) !== after) {
+                    scoreFor.set(group[i], after);
+                    didMutate = true;
+                }
+            }
+        }
+    } while (didMutate);
+}
+
 // POSTs the results of a finished round to the Worker's /stats/record.
 // Builds the player list from match.players (anyone with inRound=true),
 // computes ranks from scores, and fires the request without awaiting it
@@ -1268,25 +1349,39 @@ async function recordMatchResults(match) {
     if (!AUTH_WORKER_URL || !GAME_SERVER_SHARED_SECRET) return;
 
     const isAngels = match.mode === 'angels';
-    const players = [];
+    const inRoundPlayers = [];
     for (const p of match.players.values()) {
-        if (!p.inRound) continue;
-        const finalScore = isAngels ? match.teamScore : p.score;
+        if (p.inRound) inRoundPlayers.push(p);
+    }
+    if (inRoundPlayers.length === 0) return;
+
+    // Per-player final score. Angels: every player shares the team
+    // score, no tiebreaker (it's co-op — ties are the point). Devils:
+    // per-player score, tiebreak runs to make every score unique.
+    const scoreFor = new Map();
+    for (const p of inRoundPlayers) {
+        scoreFor.set(p, Math.round((isAngels ? match.teamScore : p.score) || 0));
+    }
+    if (!isAngels) {
+        applyDevilsScoreTiebreakers(inRoundPlayers, scoreFor);
+    }
+
+    const players = [];
+    for (const p of inRoundPlayers) {
         const entry = {
             display_name: p.displayName || p.id,
-            final_score: Math.round(finalScore || 0),
+            final_score: scoreFor.get(p),
             finishing_rank: 0,        // filled in below after sorting
         };
         if (p.userId) entry.user_id = p.userId;
         players.push(entry);
     }
-    if (players.length === 0) return;
 
     // Standard competition ranking: ties share a rank, the next rank
     // skips by however many tied. e.g. 100, 80, 80, 50 → 1, 2, 2, 4.
-    // In Angels every player ties at the team score, so they all get
-    // rank=1 — which is what the Angels leaderboard later uses to group
-    // teammates together.
+    // After the Devils tiebreaker above, ties are only possible in
+    // Angels (where every score equals match.teamScore and they all
+    // get rank=1) — which is the desired co-op behaviour.
     players.sort((a, b) => b.final_score - a.final_score);
     let rank = 1;
     for (let i = 0; i < players.length; i++) {

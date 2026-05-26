@@ -98,7 +98,6 @@
             font-weight: 700;
             letter-spacing: 0.46em;
             padding-left: 0.46em;
-            /* compensate so it visually centers */
         }
 
         .header .sub {
@@ -145,7 +144,6 @@
             z-index: 0;
         }
 
-        /* corner brackets */
         .bracket {
             position: absolute;
             width: 14px;
@@ -183,7 +181,6 @@
             border-top: none;
         }
 
-        /* scan effect on randomize */
         .stage .scan-line {
             position: absolute;
             inset: 0;
@@ -355,7 +352,6 @@
             transform: translateX(-50%) translateY(0);
         }
 
-        /* FOOTER ------------------------------------------------------------------ */
         .footer {
             position: fixed;
             bottom: 10px;
@@ -410,7 +406,7 @@
     <div class="header">
         <div class="marks">
             <span class="dot"></span>
-            <span>EXPERIMENTAL · v0.1</span>
+            <span>EXPERIMENTAL · v0.2</span>
             <span class="dot b"></span>
         </div>
         <h1>CHARACTER · LAB</h1>
@@ -424,7 +420,7 @@
         <span class="bracket br"></span>
         <div class="stage" id="stage">
             <div class="stage-floor"></div>
-            <svg id="char-svg" viewBox="-150 -150 300 300" xmlns="http://www.w3.org/2000/svg"
+            <svg id="char-svg" viewBox="-160 -160 320 320" xmlns="http://www.w3.org/2000/svg"
                 preserveAspectRatio="xMidYMid meet">
                 <g id="char-group"></g>
             </svg>
@@ -442,23 +438,25 @@
     </div>
 
     <div class="toast" id="toast"></div>
-    <div class="footer">SPEC · v0.1</div>
+    <div class="footer">SPEC · v0.2</div>
 
     <script>
         /* =============================================================================
          * AGISCENDS · CHARACTER LAB
          * -----------------------------------------------------------------------------
-         * Standalone, experimental. Single source of truth = the `state` config object.
+         * v0.2 — proportions now match the game (body radius 100 in viewBox units;
+         * eye position ±67; eye dims 116×80 — same ratios as the game's 30/24/42/29).
+         * Eye-socket movement + pupil movement are split, matching playFlapJuice's
+         * sample.vx/40 + half-additional-pupil scheme.
          *
          * Integration sketch (Phaser side, future):
          *   1. Persist `state` per player on the server (5 small string fields).
-         *   2. In the client, replicate each part's render() body using Phaser
-         *      Graphics primitives. Coordinates here are SVG-units in a 300x300
-         *      viewBox centered on (0,0), with a body radius of 100 — same proportions
-         *      as the existing game character (which uses 30 px radius). All visual
-         *      math is therefore a single uniform scale away from game-space.
-         *   3. The eye-tracking + squeeze logic in `tick()` maps directly onto the
-         *      existing per-frame visual update in the game (vx/vy → pupil offset).
+         *   2. Re-implement each part's render() using Phaser Graphics primitives.
+         *      Coordinates here live in a 320×320 viewBox centered on (0,0) with
+         *      body radius 100 — multiply by (game-body-r / 100) ≈ 0.30 to map to
+         *      game-space.
+         *   3. Eye-tracking + squeeze logic in `tick()` mirrors the game's existing
+         *      per-frame visual update; vx/vy → mouseDir is the only swap.
          * ============================================================================= */
 
         // ---- helpers ---------------------------------------------------------------
@@ -468,7 +466,6 @@
         function rand(lo, hi) { return lo + Math.random() * (hi - lo); }
         function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
         function easeInOutQuad(t) { return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
-        // damped overshoot, approximates Phaser's Elastic.easeOut
         function easeOutElastic(t) {
             if (t === 0 || t === 1) return t;
             const c4 = (2 * Math.PI) / 3;
@@ -512,26 +509,27 @@
         // ---- catalog ---------------------------------------------------------------
         const STROKE = 3;
         const BODY_R = 100;
+        const EYE_CX = 67;   // |x| offset of each eye from body center (game ratio: 24/36)
+        const EYE_CY = -7;   // y offset (game ratio: -4/36 scaled)
+        // (Game body effective radius ≈ 36, eye position ±24, eye 42×29 → here we
+        //  multiply by 100/36 ≈ 2.78 to get matching ratios in viewBox units.)
 
         const PARTS = {
-            // Patterns are rendered inside the body interior (clipped to the body circle).
-            // The body base is a solid black circle; the pattern adds white shapes on top.
-            // The final black outline is drawn last, after the pattern.
+            // Body patterns live INSIDE the body, clipped to the body interior.
+            // Because the eyes are huge and cover most of the upper half, patterns
+            // sit mainly in the lower bowl + top cap, where they remain visible.
             body: [
-                {
-                    id: 'solid', name: 'SOLID',
-                    pattern: ''
-                },
+                { id: 'solid', name: 'SOLID', pattern: '' },
                 {
                     id: 'spots', name: 'SPOTS',
                     pattern: `
-        <circle cx="-52" cy="-32" r="20" fill="#fff"/>
-        <circle cx="44"  cy="-50" r="14" fill="#fff"/>
-        <circle cx="22"  cy="44"  r="24" fill="#fff"/>
-        <circle cx="-34" cy="52"  r="18" fill="#fff"/>
-        <circle cx="62"  cy="22"  r="11" fill="#fff"/>
-        <circle cx="-72" cy="18"  r="9"  fill="#fff"/>
-        <circle cx="-12" cy="-65" r="7"  fill="#fff"/>
+        <circle cx="-50" cy="55" r="22" fill="#fff"/>
+        <circle cx="42"  cy="68" r="18" fill="#fff"/>
+        <circle cx="-12" cy="78" r="11" fill="#fff"/>
+        <circle cx="78"  cy="40" r="9"  fill="#fff"/>
+        <circle cx="-78" cy="32" r="13" fill="#fff"/>
+        <circle cx="22"  cy="40" r="8"  fill="#fff"/>
+        <circle cx="-22" cy="-88" r="6" fill="#fff"/>
       `
                 },
                 {
@@ -545,12 +543,10 @@
                 },
                 {
                     id: 'half', name: 'HALF',
-                    // Right half white; the black outline still wraps the full circle.
                     pattern: `<rect x="0" y="-110" width="120" height="220" fill="#fff"/>`
                 },
                 {
                     id: 'check', name: 'CHECKERS',
-                    // Two opposite quadrants white -> checkered look inside the circle.
                     pattern: `
         <rect x="0"    y="-110" width="120" height="110" fill="#fff"/>
         <rect x="-120" y="0"    width="120" height="110" fill="#fff"/>
@@ -558,203 +554,253 @@
                 },
                 {
                     id: 'star', name: 'STAR',
-                    pattern: `<path d="${starPath(0, 4, 58, 23, 5)}" fill="#fff"/>`
+                    pattern: `<path d="${starPath(0, 55, 36, 14, 5)}" fill="#fff"/>`
                 },
                 {
                     id: 'crescent', name: 'CRESCENT',
                     pattern: `
-        <circle cx="-14" cy="0"   r="66" fill="#fff"/>
-        <circle cx="10"  cy="-10" r="58" fill="#000"/>
+        <circle cx="-14" cy="50" r="38" fill="#fff"/>
+        <circle cx="6"   cy="42" r="32" fill="#000"/>
       `
                 },
                 {
                     id: 'cyclops', name: 'CYCLOPS',
-                    // The character has a third eye on its belly. Reused below: also a
-                    // proof-of-concept that arbitrary pattern markup composes cleanly.
                     pattern: `
-        <ellipse cx="0" cy="18" rx="48" ry="33" fill="#fff" stroke="#000" stroke-width="3"/>
-        <circle  cx="0" cy="18" r="17" fill="#000"/>
-        <circle  cx="6" cy="11" r="5"  fill="#fff"/>
+        <ellipse cx="0" cy="58" rx="32" ry="22" fill="#fff" stroke="#000" stroke-width="3"/>
+        <circle  cx="0" cy="58" r="12" fill="#000"/>
+        <circle  cx="4" cy="53" r="3.5" fill="#fff"/>
       `
                 },
             ],
 
-            // Eye whites. Render returns one eye's SVG; the mirror flag is provided
-            // for shapes that are asymmetric (e.g. almond), so left and right can
-            // mirror each other. pupilMax is the clamp range for pupil offset within
-            // this eye's interior — keeps the pupil from leaving the iris area.
+            // Eye whites — proportions matched to the game. render() returns one eye.
+            // Pupils are sized proportionally to their host eye. pupilMax is the clamp
+            // for the *additional* pupil offset inside the eye whites.
             eyes: [
                 {
                     id: 'cat', name: 'CAT',
                     render: (cx, cy) =>
-                        `<ellipse cx="${cx}" cy="${cy}" rx="36" ry="24" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>`,
-                    pupilMax: { x: 14, y: 8 }
+                        `<ellipse cx="${cx}" cy="${cy}" rx="58" ry="40" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>`,
+                    pupilMax: { x: 22, y: 13 }
                 },
                 {
                     id: 'round', name: 'ROUND',
                     render: (cx, cy) =>
-                        `<circle cx="${cx}" cy="${cy}" r="27" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>`,
-                    pupilMax: { x: 13, y: 13 }
+                        `<circle cx="${cx}" cy="${cy}" r="44" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>`,
+                    pupilMax: { x: 20, y: 20 }
                 },
                 {
                     id: 'wide', name: 'WIDE',
                     render: (cx, cy) =>
-                        `<circle cx="${cx}" cy="${cy}" r="34" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>`,
-                    pupilMax: { x: 18, y: 18 }
+                        `<circle cx="${cx}" cy="${cy}" r="55" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>`,
+                    pupilMax: { x: 28, y: 28 }
                 },
                 {
                     id: 'almond', name: 'ALMOND',
                     render: (cx, cy, mirror) =>
-                        `<ellipse cx="${cx}" cy="${cy}" rx="34" ry="20" fill="#fff" stroke="#000" stroke-width="${STROKE}" transform="rotate(${mirror ? -14 : 14} ${cx} ${cy})"/>`,
-                    pupilMax: { x: 12, y: 7 }
+                        `<ellipse cx="${cx}" cy="${cy}" rx="55" ry="32" fill="#fff" stroke="#000" stroke-width="${STROKE}" transform="rotate(${mirror ? -12 : 12} ${cx} ${cy})"/>`,
+                    pupilMax: { x: 20, y: 12 }
                 },
                 {
                     id: 'sleepy', name: 'SLEEPY',
-                    // Eye whites are normal; the eyelid overlay is drawn AFTER pupils
-                    // (see overlay()), so pupils don't poke through the lid.
                     render: (cx, cy) =>
-                        `<ellipse cx="${cx}" cy="${cy}" rx="36" ry="24" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>`,
+                        `<ellipse cx="${cx}" cy="${cy}" rx="58" ry="40" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>`,
+                    // Eyelid drawn AFTER pupils so they don't poke through.
                     overlay: (cx, cy) =>
-                        `<path d="M ${cx - 37} ${cy - 1} A 36 24 0 0 1 ${cx + 37} ${cy - 1} L ${cx + 37} ${cy - 26} L ${cx - 37} ${cy - 26} Z" fill="#000"/>`,
-                    pupilMax: { x: 11, y: 3 }
+                        `<path d="M ${cx - 59} ${cy - 2} A 58 40 0 0 1 ${cx + 59} ${cy - 2} L ${cx + 59} ${cy - 44} L ${cx - 59} ${cy - 44} Z" fill="#000"/>`,
+                    pupilMax: { x: 18, y: 4 }
                 },
                 {
                     id: 'squint', name: 'SQUINT',
                     render: (cx, cy) =>
-                        `<ellipse cx="${cx}" cy="${cy}" rx="34" ry="10" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>`,
-                    pupilMax: { x: 12, y: 2 }
+                        `<ellipse cx="${cx}" cy="${cy}" rx="55" ry="16" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>`,
+                    pupilMax: { x: 20, y: 3 }
                 },
                 {
                     id: 'diamond', name: 'DIAMOND',
                     render: (cx, cy) =>
-                        `<polygon points="${cx - 32},${cy} ${cx},${cy - 22} ${cx + 32},${cy} ${cx},${cy + 22}" fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>`,
-                    pupilMax: { x: 12, y: 9 }
+                        `<polygon points="${cx - 52},${cy} ${cx},${cy - 36} ${cx + 52},${cy} ${cx},${cy + 36}" fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>`,
+                    pupilMax: { x: 20, y: 14 }
                 },
                 {
                     id: 'oval-tall', name: 'OVAL',
                     render: (cx, cy) =>
-                        `<ellipse cx="${cx}" cy="${cy}" rx="22" ry="30" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>`,
-                    pupilMax: { x: 9, y: 15 }
+                        `<ellipse cx="${cx}" cy="${cy}" rx="36" ry="48" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>`,
+                    pupilMax: { x: 14, y: 22 }
                 },
             ],
 
-            // Pupils are rendered at (0,0); their position is set via a translate()
-            // on the parent <g>, which the per-frame tick() updates for eye-tracking.
+            // Pupils render at (0,0); the parent <g>'s translate sets position so the
+            // per-frame tick() can update offsets cheaply. Sizes follow the game's
+            // pupil:eye ratio (slit ≈ 16% wide × 68% tall).
             pupils: [
-                { id: 'slit', name: 'SLIT', render: (cx, cy) => `<rect x="${cx - 5}" y="${cy - 16}" width="10" height="32" fill="#000" rx="2"/>` },
-                { id: 'dot', name: 'DOT', render: (cx, cy) => `<circle cx="${cx}" cy="${cy}" r="6" fill="#000"/>` },
-                { id: 'dot-big', name: 'BIG DOT', render: (cx, cy) => `<circle cx="${cx}" cy="${cy}" r="11" fill="#000"/>` },
-                { id: 'square', name: 'SQUARE', render: (cx, cy) => `<rect x="${cx - 8}" y="${cy - 8}" width="16" height="16" fill="#000"/>` },
-                { id: 'heart', name: 'HEART', render: (cx, cy) => `<path d="${heartPath(cx, cy - 2, 10)}" fill="#000"/>` },
-                { id: 'star', name: 'STAR', render: (cx, cy) => `<path d="${starPath(cx, cy, 13, 5.5, 5)}" fill="#000"/>` },
-                { id: 'cross', name: 'CROSS', render: (cx, cy) => `<path d="M ${cx - 12} ${cy - 4} h 8 v -8 h 8 v 8 h 8 v 8 h -8 v 8 h -8 v -8 h -8 z" fill="#000"/>` },
-                { id: 'diamond', name: 'DIAMOND', render: (cx, cy) => `<polygon points="${cx - 9},${cy} ${cx},${cy - 13} ${cx + 9},${cy} ${cx},${cy + 13}" fill="#000"/>` },
-                { id: 'spiral', name: 'SPIRAL', render: (cx, cy) => `<path d="${spiralPath(cx, cy, 13)}" fill="none" stroke="#000" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>` },
+                { id: 'slit', name: 'SLIT', render: (cx, cy) => `<rect x="${cx - 8}" y="${cy - 26}" width="16" height="52" fill="#000" rx="3"/>` },
+                { id: 'dot', name: 'DOT', render: (cx, cy) => `<circle cx="${cx}" cy="${cy}" r="10" fill="#000"/>` },
+                { id: 'dot-big', name: 'BIG DOT', render: (cx, cy) => `<circle cx="${cx}" cy="${cy}" r="18" fill="#000"/>` },
+                { id: 'square', name: 'SQUARE', render: (cx, cy) => `<rect x="${cx - 13}" y="${cy - 13}" width="26" height="26" fill="#000"/>` },
+                { id: 'heart', name: 'HEART', render: (cx, cy) => `<path d="${heartPath(cx, cy - 3, 16)}" fill="#000"/>` },
+                { id: 'star', name: 'STAR', render: (cx, cy) => `<path d="${starPath(cx, cy, 21, 9, 5)}" fill="#000"/>` },
+                { id: 'cross', name: 'CROSS', render: (cx, cy) => `<path d="M ${cx - 19} ${cy - 6} h 13 v -13 h 13 v 13 h 13 v 13 h -13 v 13 h -13 v -13 h -13 z" fill="#000"/>` },
+                { id: 'diamond', name: 'DIAMOND', render: (cx, cy) => `<polygon points="${cx - 14},${cy} ${cx},${cy - 21} ${cx + 14},${cy} ${cx},${cy + 21}" fill="#000"/>` },
+                { id: 'spiral', name: 'SPIRAL', render: (cx, cy) => `<path d="${spiralPath(cx, cy, 22)}" fill="none" stroke="#000" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>` },
                 { id: 'none', name: 'BLANK', render: () => '' },
             ],
 
-            // Ears are drawn BEHIND the body so their inner edges are covered by the
-            // body's black fill — yielding a clean continuous silhouette where they
-            // meet the head. All ear shapes are solid-black silhouettes.
+            // Ears render IN FRONT of the body. Outlined (black stroke, white fill).
+            // The interior is visible against the dark body where the ear overlaps;
+            // the outline carries the shape where the ear extends past the body.
             ears: [
                 { id: 'none', name: 'NONE', render: () => '' },
                 {
                     id: 'cat', name: 'CAT',
                     render: () => `
-        <polygon points="-82,-72 -55,-128 -28,-72" fill="#000" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
-        <polygon points="82,-72 55,-128 28,-72" fill="#000" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>`
+        <polygon points="-84,-68 -56,-128 -28,-68" fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+        <polygon points="84,-68 56,-128 28,-68" fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+        <polygon points="-72,-74 -56,-110 -40,-74" fill="#000"/>
+        <polygon points="72,-74 56,-110 40,-74" fill="#000"/>
+      `
                 },
                 {
                     id: 'fox', name: 'FOX',
                     render: () => `
-        <polygon points="-86,-66 -62,-148 -38,-66" fill="#000" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
-        <polygon points="86,-66 62,-148 38,-66" fill="#000" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>`
+        <polygon points="-86,-60 -62,-148 -38,-60" fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+        <polygon points="86,-60 62,-148 38,-60" fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+        <polygon points="-76,-66 -62,-126 -48,-66" fill="#000"/>
+        <polygon points="76,-66 62,-126 48,-66" fill="#000"/>
+      `
                 },
                 {
                     id: 'bear', name: 'BEAR',
                     render: () => `
-        <circle cx="-68" cy="-82" r="22" fill="#000" stroke="#000" stroke-width="${STROKE}"/>
-        <circle cx="68"  cy="-82" r="22" fill="#000" stroke="#000" stroke-width="${STROKE}"/>`
+        <path d="M -88 -84 A 28 28 0 0 1 -32 -84 Z" fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+        <path d="M  88 -84 A 28 28 0 0 0  32 -84 Z" fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+        <path d="M -74 -84 A 14 14 0 0 1 -46 -84 Z" fill="#000"/>
+        <path d="M  74 -84 A 14 14 0 0 0  46 -84 Z" fill="#000"/>
+      `
                 },
                 {
                     id: 'floppy', name: 'FLOPPY',
-                    // Side ears hanging down — translate then rotate so the rotation is
-                    // about the attachment point rather than the ellipse center.
                     render: () => `
-        <ellipse cx="0" cy="0" rx="22" ry="60" fill="#000" stroke="#000" stroke-width="${STROKE}" transform="translate(-94 20) rotate(18)"/>
-        <ellipse cx="0" cy="0" rx="22" ry="60" fill="#000" stroke="#000" stroke-width="${STROKE}" transform="translate(94 20)  rotate(-18)"/>`
+        <path d="M -78 -42 Q -132 -10 -110 60 Q -82 86 -68 50 Q -64 -10 -78 -42 Z"
+              fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+        <path d="M  78 -42 Q  132 -10  110 60 Q  82 86  68 50 Q  64 -10  78 -42 Z"
+              fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+      `
                 },
                 {
                     id: 'bunny', name: 'BUNNY',
                     render: () => `
-        <ellipse cx="0" cy="0" rx="15" ry="48" fill="#000" stroke="#000" stroke-width="${STROKE}" transform="translate(-42 -128) rotate(-8)"/>
-        <ellipse cx="0" cy="0" rx="15" ry="48" fill="#000" stroke="#000" stroke-width="${STROKE}" transform="translate(42 -128)  rotate(8)"/>`
+        <path d="M -52 -76 Q -58 -148 -34 -158 Q -22 -150 -32 -76 Z"
+              fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+        <path d="M  52 -76 Q  58 -148  34 -158 Q  22 -150  32 -76 Z"
+              fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+        <path d="M -46 -82 Q -50 -140 -38 -146 Q -32 -140 -38 -82 Z" fill="#000"/>
+        <path d="M  46 -82 Q  50 -140  38 -146 Q  32 -140  38 -82 Z" fill="#000"/>
+      `
                 },
                 {
                     id: 'devil', name: 'HORNS',
                     render: () => `
-        <path d="M -78 -78 Q -94 -118 -52 -134 Q -68 -100 -52 -82 Z" fill="#000" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
-        <path d="M 78 -78 Q 94 -118 52 -134 Q 68 -100 52 -82 Z" fill="#000" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>`
+        <path d="M -76 -76 Q -98 -126 -56 -140 Q -64 -110 -54 -82 Z"
+              fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+        <path d="M  76 -76 Q  98 -126  56 -140 Q  64 -110  54 -82 Z"
+              fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+      `
                 },
                 {
                     id: 'elf', name: 'ELF',
                     render: () => `
-        <path d="M -92 -28 Q -134 -64 -106 -90 Q -78 -78 -78 -34 Z" fill="#000" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
-        <path d="M 92 -28 Q 134 -64 106 -90 Q 78 -78 78 -34 Z" fill="#000" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>`
+        <path d="M -84 -32 Q -148 -68 -118 -100 Q -82 -82 -74 -36 Z"
+              fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+        <path d="M  84 -32 Q  148 -68  118 -100 Q  82 -82  74 -36 Z"
+              fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+      `
                 },
             ],
 
-            // Tails drawn behind the body. Single-side (right) since the character
-            // has no notion of facing yet — easy to mirror later if needed.
+            // Tails render BEHIND the body so the attachment is hidden. Closed shapes
+            // (stroke+fill) for the fat tails; thin ones keep that taper.
             tail: [
                 { id: 'none', name: 'NONE', render: () => '' },
                 {
                     id: 'cat', name: 'CAT',
+                    // Closed tapering S-curve — wider at the base, narrower at the tip.
                     render: () => `
-        <path d="M 78 64 Q 142 80 148 14 Q 144 -38 96 -10 Q 84 4 102 18"
-              fill="none" stroke="#000" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>`
+        <path d="M 70 72
+                 C 134 86 162 30 148 -22
+                 C 138 -44 110 -36 102 -14
+                 C 98 4 90 22 80 72 Z"
+              fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+      `
                 },
                 {
                     id: 'straight', name: 'STRAIGHT',
-                    render: () => `<path d="M 70 70 Q 124 76 142 28" fill="none" stroke="#000" stroke-width="14" stroke-linecap="round"/>`
+                    render: () => `
+        <path d="M 70 78 Q 132 78 154 20 Q 158 -6 142 -4 Q 132 0 126 26 Q 110 60 70 60 Z"
+              fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+      `
                 },
                 {
                     id: 'fox', name: 'FOX',
                     render: () => `
-        <path d="M 76 70 Q 130 88 140 24" fill="none" stroke="#000" stroke-width="22" stroke-linecap="round"/>
-        <circle cx="138" cy="20" r="19" fill="#000"/>`
+        <path d="M 70 76 Q 96 90 136 80 Q 174 64 168 20 Q 158 -22 124 -12 Q 100 -2 88 28 Q 78 52 70 76 Z"
+              fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+        <path d="M 148 -2 Q 160 8 156 26" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M 132 -4 Q 140 6 134 22" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round"/>
+      `
                 },
                 {
                     id: 'devil', name: 'DEVIL',
+                    // Whip + arrow as a single closed path so they read as one shape.
                     render: () => `
-        <path d="M 72 78 Q 124 96 142 46" fill="none" stroke="#000" stroke-width="9" stroke-linecap="round"/>
-        <polygon points="152,32 128,48 144,60" fill="#000"/>`
+        <path d="M 70 88
+                 Q 122 100 138 60
+                 L 158 56
+                 L 142 42
+                 L 158 22
+                 L 132 30
+                 L 144 50
+                 Q 130 56 124 64
+                 Q 110 78 70 76 Z"
+              fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+      `
                 },
                 {
                     id: 'puff', name: 'PUFF',
-                    render: () => `<circle cx="100" cy="82" r="20" fill="#000" stroke="#000" stroke-width="${STROKE}"/>`
+                    render: () => `<circle cx="98" cy="86" r="24" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>`
                 },
                 {
                     id: 'lizard', name: 'LIZARD',
-                    render: () => `<path d="M 60 84 Q 132 112 158 54 Q 150 18 162 -6" fill="none" stroke="#000" stroke-width="8" stroke-linecap="round"/>`
+                    render: () => `
+        <path d="M 64 88 Q 132 116 158 56 Q 162 26 148 8 Q 142 0 138 8 Q 146 24 144 50 Q 130 88 70 76 Z"
+              fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+      `
                 },
                 {
                     id: 'curl', name: 'CURL',
-                    render: () => `
-        <path d="M 76 70 Q 124 80 144 32 Q 158 -18 116 -22 Q 86 -10 110 6 Q 130 10 124 -8"
-              fill="none" stroke="#000" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>`
+                    // A bona fide spiral. Outline-effect via double-stroke (black outer +
+                    // white inner) so it reads as a curled tube even on the white stage.
+                    render: () => {
+                        // Start of tail at body's right; spiral arc rising up + curling.
+                        // We hand-build a single thickened curve as two parallel paths.
+                        const d = `M 70 76
+                   C 130 92 158 50 156 6
+                   C 154 -36 116 -50 96 -28
+                   C 80 -10 96 6 112 -2
+                   C 124 -8 124 -22 112 -22
+                   C 104 -22 102 -14 108 -10
+                   C 114 -8 116 -16 110 -16`;
+                        return `
+          <path d="${d}" fill="none" stroke="#000" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="${d}" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+        `;
+                    }
                 },
             ],
         };
 
         // ---- state (single source of truth) ----------------------------------------
-        const state = {
-            body: 'solid',
-            eyes: 'cat',
-            pupils: 'slit',
-            ears: 'none',
-            tail: 'none',
-        };
+        const state = { body: 'solid', eyes: 'cat', pupils: 'slit', ears: 'none', tail: 'none' };
 
         const CATEGORIES = [
             { key: 'body', label: 'BODY' },
@@ -764,21 +810,18 @@
             { key: 'tail', label: 'TAIL' },
         ];
 
-        function partsOf(category) { return PARTS[category]; }
-        function getIndex(category) { return PARTS[category].findIndex(p => p.id === state[category]); }
-        function setByIndex(category, idx) {
-            const arr = PARTS[category];
+        function partsOf(c) { return PARTS[c]; }
+        function getIndex(c) { return PARTS[c].findIndex(p => p.id === state[c]); }
+        function setByIndex(c, idx) {
+            const arr = PARTS[c];
             const i = ((idx % arr.length) + arr.length) % arr.length;
-            state[category] = arr[i].id;
+            state[c] = arr[i].id;
         }
 
         // ---- DOM refs cached after each rebuild -----------------------------------
         let charGroup, eyesGroup, pupilL, pupilR;
 
         // ---- render ---------------------------------------------------------------
-        const EYE_CX = 40;   // |x| offset of each eye from body center
-        const EYE_CY = -7;   // y offset of eyes from body center
-
         function rebuild() {
             const bodyPart = partsOf('body').find(p => p.id === state.body);
             const eyesPart = partsOf('eyes').find(p => p.id === state.eyes);
@@ -789,22 +832,23 @@
             const overlayLeft = eyesPart.overlay ? eyesPart.overlay(-EYE_CX, EYE_CY, false) : '';
             const overlayRight = eyesPart.overlay ? eyesPart.overlay(EYE_CX, EYE_CY, true) : '';
 
+            // Render order (back → front):
+            //   tail → body (fill+pattern+stroke) → ears → eyes
+            // Tails are behind the body so the attachment is hidden; ears are in FRONT
+            // so their white interiors are visible against the body where they overlap.
             charGroup.innerHTML = `
     <defs>
-      <clipPath id="body-clip">
-        <circle cx="0" cy="0" r="${BODY_R - 0.5}"/>
-      </clipPath>
+      <clipPath id="body-clip"><circle cx="0" cy="0" r="${BODY_R - 0.5}"/></clipPath>
     </defs>
 
     <g class="tail">${tailPart.render()}</g>
-    <g class="ears">${earsPart.render()}</g>
 
-    <!-- body: base fill, pattern (clipped), then outline on top -->
     <circle cx="0" cy="0" r="${BODY_R}" fill="#000"/>
     <g clip-path="url(#body-clip)">${bodyPart.pattern}</g>
     <circle cx="0" cy="0" r="${BODY_R}" fill="none" stroke="#000" stroke-width="${STROKE}"/>
 
-    <!-- eyes: whites, pupils (positioned by translate), optional overlay (eyelid) -->
+    <g class="ears">${earsPart.render()}</g>
+
     <g class="eyes" id="eyes-group">
       ${eyesPart.render(-EYE_CX, EYE_CY, false)}
       ${eyesPart.render(EYE_CX, EYE_CY, true)}
@@ -820,67 +864,82 @@
         }
 
         // ---- animation state -------------------------------------------------------
+        // Split into eye-socket shift + pupil offset, mirroring the game's vx/20 +
+        // half-pupil scheme. Both are smoothed toward a target derived from cursor
+        // distance or idle wander.
         const eyeAnim = {
-            current: { x: 0, y: 0 },
-            target: { x: 0, y: 0 },
-            mouseTarget: null,     // {x,y} when cursor is on the page
-            idleTarget: { x: 0, y: 0 },
+            shift: { current: { x: 0, y: 0 }, target: { x: 0, y: 0 } },
+            pupilOff: { current: { x: 0, y: 0 }, target: { x: 0, y: 0 } },
+            mouseDir: null,                  // {x,y} in [-1, 1] when cursor active
+            idleDir: { x: 0, y: 0 },
             nextIdleAt: 0,
         };
+        // Per-direction maxes — taken from the game's clamps scaled to a 100-radius
+        // body (game uses ±6/±4 for sockets, ±3/±2 extra for pupils).
+        const EYE_SHIFT_MAX = { x: 17, y: 11 };
+        const PUPIL_OFF_MAX = { x: 8, y: 5 };
 
         const blinkAnim = {
-            amount: 0,             // 0 = open, 1 = closed
-            state: 'open',
-            nextBlinkAt: 0,
-            phaseStart: 0,
+            amount: 0, state: 'open', nextBlinkAt: 0, phaseStart: 0,
         };
 
         const squeezeAnim = {
             active: false,
             startTime: 0,
-            // 3-phase juice taken from the game's playFlapJuice():
-            // 1) stretch tall, 2) squash wide, 3) settle with elastic.
+            slant: 0,
+            // 3-phase juice — matches the game's playFlapJuice timings.
             phases: [
-                { dur: 120, sx: 0.65, sy: 1.55, ang: 0, ease: easeOutCubic },
-                { dur: 180, sx: 1.28, sy: 0.80, ang: 0, ease: easeInOutQuad },
-                { dur: 420, sx: 1.00, sy: 1.00, ang: 0, ease: easeOutElastic },
+                { dur: 120, sx: 0.65, sy: 1.55, angK: 1.0, ease: easeOutCubic },
+                { dur: 180, sx: 1.28, sy: 0.80, angK: -0.5, ease: easeInOutQuad },
+                { dur: 420, sx: 1.00, sy: 1.00, angK: 0, ease: easeOutElastic },
             ],
             totalDur: 0,
-            slant: 0,
         };
         squeezeAnim.totalDur = squeezeAnim.phases.reduce((a, p) => a + p.dur, 0);
 
         function triggerSqueeze() {
-            if (squeezeAnim.active) return;            // ignore re-triggers mid-anim
+            if (squeezeAnim.active) return;
             squeezeAnim.active = true;
             squeezeAnim.startTime = performance.now();
-            squeezeAnim.slant = (Math.random() - 0.5) * 22;  // ±11°
+            squeezeAnim.slant = (Math.random() - 0.5) * 22; // ±11°
         }
 
         // ---- per-frame tick --------------------------------------------------------
         function tick(now) {
-            // Eye target ---------------------------------------------------------------
-            if (eyeAnim.mouseTarget) {
-                eyeAnim.target.x = eyeAnim.mouseTarget.x;
-                eyeAnim.target.y = eyeAnim.mouseTarget.y;
+            // ----- direction ----------------------------------------------------------
+            let dirX, dirY;
+            if (eyeAnim.mouseDir) {
+                dirX = eyeAnim.mouseDir.x;
+                dirY = eyeAnim.mouseDir.y;
             } else {
                 if (now >= eyeAnim.nextIdleAt) {
-                    eyeAnim.idleTarget = { x: rand(-1, 1) * 14, y: rand(-1, 1) * 10 };
+                    eyeAnim.idleDir.x = rand(-1, 1) * 0.55;
+                    eyeAnim.idleDir.y = rand(-1, 1) * 0.55;
                     eyeAnim.nextIdleAt = now + rand(1500, 3500);
                 }
-                eyeAnim.target.x = eyeAnim.idleTarget.x;
-                eyeAnim.target.y = eyeAnim.idleTarget.y;
+                dirX = eyeAnim.idleDir.x;
+                dirY = eyeAnim.idleDir.y;
             }
-            eyeAnim.current.x += (eyeAnim.target.x - eyeAnim.current.x) * 0.18;
-            eyeAnim.current.y += (eyeAnim.target.y - eyeAnim.current.y) * 0.18;
 
+            eyeAnim.shift.target.x = dirX * EYE_SHIFT_MAX.x;
+            eyeAnim.shift.target.y = dirY * EYE_SHIFT_MAX.y;
+            eyeAnim.pupilOff.target.x = dirX * PUPIL_OFF_MAX.x;
+            eyeAnim.pupilOff.target.y = dirY * PUPIL_OFF_MAX.y;
+
+            eyeAnim.shift.current.x += (eyeAnim.shift.target.x - eyeAnim.shift.current.x) * 0.18;
+            eyeAnim.shift.current.y += (eyeAnim.shift.target.y - eyeAnim.shift.current.y) * 0.18;
+            eyeAnim.pupilOff.current.x += (eyeAnim.pupilOff.target.x - eyeAnim.pupilOff.current.x) * 0.18;
+            eyeAnim.pupilOff.current.y += (eyeAnim.pupilOff.target.y - eyeAnim.pupilOff.current.y) * 0.18;
+
+            // Clamp pupil offset so it stays within the host eye's iris area.
             const eyesPart = partsOf('eyes').find(p => p.id === state.eyes);
-            const px = clamp(eyeAnim.current.x, -eyesPart.pupilMax.x, eyesPart.pupilMax.x);
-            const py = clamp(eyeAnim.current.y, -eyesPart.pupilMax.y, eyesPart.pupilMax.y);
+            const px = clamp(eyeAnim.pupilOff.current.x, -eyesPart.pupilMax.x, eyesPart.pupilMax.x);
+            const py = clamp(eyeAnim.pupilOff.current.y, -eyesPart.pupilMax.y, eyesPart.pupilMax.y);
+
             if (pupilL) pupilL.setAttribute('transform', `translate(${(-EYE_CX + px).toFixed(2)} ${(EYE_CY + py).toFixed(2)})`);
             if (pupilR) pupilR.setAttribute('transform', `translate(${(EYE_CX + px).toFixed(2)} ${(EYE_CY + py).toFixed(2)})`);
 
-            // Blink state machine ------------------------------------------------------
+            // ----- blink --------------------------------------------------------------
             if (blinkAnim.state === 'open') {
                 if (now >= blinkAnim.nextBlinkAt) { blinkAnim.state = 'closing'; blinkAnim.phaseStart = now; }
             } else if (blinkAnim.state === 'closing') {
@@ -896,39 +955,43 @@
                     blinkAnim.nextBlinkAt = now + rand(3500, 7000);
                 }
             }
+
+            // Compose eye-socket shift + blink on the eyes-group. Outer transform is
+            // applied LAST visually, so we want: blink (innermost) → socket shift.
             if (eyesGroup) {
                 const blinkScale = 1 - blinkAnim.amount * 0.94;
-                eyesGroup.setAttribute('transform', `translate(0 ${EYE_CY}) scale(1 ${blinkScale}) translate(0 ${-EYE_CY})`);
+                const sx = eyeAnim.shift.current.x, sy = eyeAnim.shift.current.y;
+                eyesGroup.setAttribute('transform',
+                    `translate(${sx.toFixed(2)} ${sy.toFixed(2)}) translate(0 ${EYE_CY}) scale(1 ${blinkScale}) translate(0 ${-EYE_CY})`);
             }
 
-            // Squeeze (full-body juice) ------------------------------------------------
+            // ----- squeeze (full-body juice) -----------------------------------------
             if (squeezeAnim.active) {
                 const elapsed = now - squeezeAnim.startTime;
                 if (elapsed >= squeezeAnim.totalDur) {
                     charGroup.removeAttribute('transform');
                     squeezeAnim.active = false;
                 } else {
-                    // Find current phase, compute eased local t, lerp from prev to current.
+                    // Walk phases, tracking the end-state of the previous one as the
+                    // current phase's start-state. Lerp start → end with the phase's ease.
+                    // Angle interpolates the same way, scaled by the random slant.
                     let acc = 0;
                     let sx = 1, sy = 1, ang = 0;
                     let prevSx = 1, prevSy = 1, prevAng = 0;
                     for (let i = 0; i < squeezeAnim.phases.length; i++) {
                         const p = squeezeAnim.phases[i];
+                        const endAng = squeezeAnim.slant * p.angK;
                         if (elapsed < acc + p.dur) {
-                            const localT = p.ease((elapsed - acc) / p.dur);
-                            sx = lerp(prevSx, p.sx, localT);
-                            sy = lerp(prevSy, p.sy, localT);
-                            ang = lerp(prevAng, p.ang, localT);
+                            const t = p.ease((elapsed - acc) / p.dur);
+                            sx = lerp(prevSx, p.sx, t);
+                            sy = lerp(prevSy, p.sy, t);
+                            ang = lerp(prevAng, endAng, t);
                             break;
                         }
                         acc += p.dur;
-                        prevSx = p.sx; prevSy = p.sy; prevAng = p.ang;
+                        prevSx = p.sx; prevSy = p.sy; prevAng = endAng;
                     }
-                    // Apply a small per-frame slant during phases 1 & 2; phase 3 returns to 0.
-                    const slantNow = elapsed < squeezeAnim.phases[0].dur + squeezeAnim.phases[1].dur
-                        ? squeezeAnim.slant * (elapsed < squeezeAnim.phases[0].dur ? 1 : -0.5)
-                        : 0;
-                    charGroup.setAttribute('transform', `scale(${sx.toFixed(3)} ${sy.toFixed(3)}) rotate(${slantNow.toFixed(2)})`);
+                    charGroup.setAttribute('transform', `scale(${sx.toFixed(3)} ${sy.toFixed(3)}) rotate(${ang.toFixed(2)})`);
                 }
             }
 
@@ -987,10 +1050,9 @@
             }
             refreshControls();
             rebuild();
-            // Visual flourish: scan line across the stage + a small body squeeze.
             const st = $('#stage');
             st.classList.remove('scan');
-            void st.offsetWidth;       // reflow so the animation can replay
+            void st.offsetWidth;
             st.classList.add('scan');
             setTimeout(() => st.classList.remove('scan'), 600);
             triggerSqueeze();
@@ -999,7 +1061,6 @@
         function exportJson() {
             const text = JSON.stringify(state);
             const fallback = () => {
-                // Last resort: select-and-copy via a hidden textarea.
                 const ta = document.createElement('textarea');
                 ta.value = text;
                 ta.style.position = 'fixed';
@@ -1012,10 +1073,7 @@
                 showToast(ok ? 'CONFIG COPIED' : 'COPY FAILED · SEE CONSOLE');
             };
             if (navigator.clipboard?.writeText) {
-                navigator.clipboard.writeText(text).then(
-                    () => showToast('CONFIG COPIED'),
-                    fallback
-                );
+                navigator.clipboard.writeText(text).then(() => showToast('CONFIG COPIED'), fallback);
             } else {
                 fallback();
             }
@@ -1035,10 +1093,6 @@
         function setupInteractions() {
             const stage = $('#stage');
             stage.addEventListener('click', triggerSqueeze);
-
-            // Window-wide cursor tracking — eyes follow the cursor even when it's
-            // over the controls. On mobile, mouseTarget stays null and the idle
-            // look-around loop drives the eyes instead.
             window.addEventListener('mousemove', (e) => {
                 const rect = stage.getBoundingClientRect();
                 const cx = rect.left + rect.width / 2;
@@ -1047,13 +1101,10 @@
                 const dy = e.clientY - cy;
                 const norm = clamp(Math.hypot(dx, dy) / 240, 0, 1);
                 const ang = Math.atan2(dy, dx);
-                eyeAnim.mouseTarget = {
-                    x: Math.cos(ang) * norm * 18,
-                    y: Math.sin(ang) * norm * 14,
-                };
+                eyeAnim.mouseDir = { x: Math.cos(ang) * norm, y: Math.sin(ang) * norm };
             });
-            window.addEventListener('mouseleave', () => { eyeAnim.mouseTarget = null; });
-            window.addEventListener('blur', () => { eyeAnim.mouseTarget = null; });
+            window.addEventListener('mouseleave', () => { eyeAnim.mouseDir = null; });
+            window.addEventListener('blur', () => { eyeAnim.mouseDir = null; });
         }
 
         // ---- boot ------------------------------------------------------------------
