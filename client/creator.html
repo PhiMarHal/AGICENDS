@@ -559,16 +559,8 @@
                 {
                     id: 'crescent', name: 'CRESCENT',
                     pattern: `
-        <circle cx="-14" cy="50" r="38" fill="#fff"/>
-        <circle cx="6"   cy="42" r="32" fill="#000"/>
-      `
-                },
-                {
-                    id: 'cyclops', name: 'CYCLOPS',
-                    pattern: `
-        <ellipse cx="0" cy="58" rx="32" ry="22" fill="#fff" stroke="#000" stroke-width="3"/>
-        <circle  cx="0" cy="58" r="12" fill="#000"/>
-        <circle  cx="4" cy="53" r="3.5" fill="#fff"/>
+        <circle cx="-16" cy="0"  r="52" fill="#fff"/>
+        <circle cx="6"   cy="-6" r="44" fill="#000"/>
       `
                 },
             ],
@@ -602,13 +594,12 @@
                     pupilMax: { x: 20, y: 12 }
                 },
                 {
-                    id: 'sleepy', name: 'SLEEPY',
-                    render: (cx, cy) =>
-                        `<ellipse cx="${cx}" cy="${cy}" rx="58" ry="40" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>`,
-                    // Eyelid drawn AFTER pupils so they don't poke through.
-                    overlay: (cx, cy) =>
-                        `<path d="M ${cx - 59} ${cy - 2} A 58 40 0 0 1 ${cx + 59} ${cy - 2} L ${cx + 59} ${cy - 44} L ${cx - 59} ${cy - 44} Z" fill="#000"/>`,
-                    pupilMax: { x: 18, y: 4 }
+                    id: 'droopy', name: 'DROOPY',
+                    // Vertical-reverse of ALMOND, with a more dramatic tilt — outer corners
+                    // sweep downward like sleepy/sad eyes.
+                    render: (cx, cy, mirror) =>
+                        `<ellipse cx="${cx}" cy="${cy}" rx="58" ry="28" fill="#fff" stroke="#000" stroke-width="${STROKE}" transform="rotate(${mirror ? 20 : -20} ${cx} ${cy})"/>`,
+                    pupilMax: { x: 20, y: 8 }
                 },
                 {
                     id: 'squint', name: 'SQUINT',
@@ -636,9 +627,8 @@
             pupils: [
                 { id: 'slit', name: 'SLIT', render: (cx, cy) => `<rect x="${cx - 8}" y="${cy - 26}" width="16" height="52" fill="#000" rx="3"/>` },
                 { id: 'dot', name: 'DOT', render: (cx, cy) => `<circle cx="${cx}" cy="${cy}" r="10" fill="#000"/>` },
-                { id: 'dot-big', name: 'BIG DOT', render: (cx, cy) => `<circle cx="${cx}" cy="${cy}" r="18" fill="#000"/>` },
-                { id: 'square', name: 'SQUARE', render: (cx, cy) => `<rect x="${cx - 13}" y="${cy - 13}" width="26" height="26" fill="#000"/>` },
-                { id: 'heart', name: 'HEART', render: (cx, cy) => `<path d="${heartPath(cx, cy - 3, 16)}" fill="#000"/>` },
+                { id: 'dot-big', name: 'BIG DOT', render: (cx, cy) => `<circle cx="${cx}" cy="${cy}" r="24" fill="#000"/>` },
+                { id: 'heart', name: 'HEART', render: (cx, cy) => `<path d="${heartPath(cx, cy - 3, 22)}" fill="#000"/>` },
                 { id: 'star', name: 'STAR', render: (cx, cy) => `<path d="${starPath(cx, cy, 21, 9, 5)}" fill="#000"/>` },
                 { id: 'cross', name: 'CROSS', render: (cx, cy) => `<path d="M ${cx - 19} ${cy - 6} h 13 v -13 h 13 v 13 h 13 v 13 h -13 v 13 h -13 v -13 h -13 z" fill="#000"/>` },
                 { id: 'diamond', name: 'DIAMOND', render: (cx, cy) => `<polygon points="${cx - 14},${cy} ${cx},${cy - 21} ${cx + 14},${cy} ${cx},${cy + 21}" fill="#000"/>` },
@@ -646,85 +636,95 @@
                 { id: 'none', name: 'BLANK', render: () => '' },
             ],
 
-            // Ears render IN FRONT of the body. Outlined (black stroke, white fill).
-            // The interior is visible against the dark body where the ear overlaps;
-            // the outline carries the shape where the ear extends past the body.
+            // Ears render BEHIND the body so the attachment is hidden by the body's
+            // fill. The body silhouette stays clean; visible portions of each ear sit
+            // above the head as line-art (white interior blends with the white stage,
+            // black outline carries the shape). Inner-ear details show where they
+            // poke above the body's outline.
             ears: [
                 { id: 'none', name: 'NONE', render: () => '' },
                 {
                     id: 'cat', name: 'CAT',
+                    // The base is a chord of the body circle tilted ~30° so it tucks
+                    // UNDER the body's curve (both base corners on/inside the perimeter)
+                    // instead of sticking out past it. Only the two sides + apex show.
                     render: () => `
-        <polygon points="-84,-68 -56,-128 -28,-68" fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
-        <polygon points="84,-68 56,-128 28,-68" fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
-        <polygon points="-72,-74 -56,-110 -40,-74" fill="#000"/>
-        <polygon points="72,-74 56,-110 40,-74" fill="#000"/>
-      `
-                },
-                {
-                    id: 'fox', name: 'FOX',
-                    render: () => `
-        <polygon points="-86,-60 -62,-148 -38,-60" fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
-        <polygon points="86,-60 62,-148 38,-60" fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
-        <polygon points="-76,-66 -62,-126 -48,-66" fill="#000"/>
-        <polygon points="76,-66 62,-126 48,-66" fill="#000"/>
+        <polygon points="-85,-50 -100,-118 -35,-79" fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+        <polygon points="85,-50 100,-118 35,-79" fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+        <polygon points="-80,-63 -89,-104 -50,-80" fill="#000"/>
+        <polygon points="80,-63 89,-104 50,-80" fill="#000"/>
       `
                 },
                 {
                     id: 'bear', name: 'BEAR',
+                    // Small round ears that overlap the body slightly — the bottom edge
+                    // is hidden by the body's fill so they read as domes attached to
+                    // the head. No inner detail (with behind-body rendering it would
+                    // dominate and look like a second pair of eyes peering over).
                     render: () => `
-        <path d="M -88 -84 A 28 28 0 0 1 -32 -84 Z" fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
-        <path d="M  88 -84 A 28 28 0 0 0  32 -84 Z" fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
-        <path d="M -74 -84 A 14 14 0 0 1 -46 -84 Z" fill="#000"/>
-        <path d="M  74 -84 A 14 14 0 0 0  46 -84 Z" fill="#000"/>
+        <circle cx="-58" cy="-100" r="24" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>
+        <circle cx="58"  cy="-100" r="24" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>
       `
                 },
                 {
                     id: 'floppy', name: 'FLOPPY',
+                    // Bigger flaps attached higher up (around the upper-side / eye level)
+                    // so they hang from the head rather than dangling low under it.
                     render: () => `
-        <path d="M -78 -42 Q -132 -10 -110 60 Q -82 86 -68 50 Q -64 -10 -78 -42 Z"
+        <path d="M -74 -60 Q -152 -48 -148 20 Q -144 50 -116 46 Q -94 28 -86 -16 Q -78 -48 -74 -60 Z"
               fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
-        <path d="M  78 -42 Q  132 -10  110 60 Q  82 86  68 50 Q  64 -10  78 -42 Z"
+        <path d="M  74 -60 Q  152 -48  148 20 Q  144 50  116 46 Q  94 28  86 -16 Q  78 -48  74 -60 Z"
               fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
       `
                 },
                 {
                     id: 'bunny', name: 'BUNNY',
+                    // Taller, wider — reach near the top of the viewBox.
                     render: () => `
-        <path d="M -52 -76 Q -58 -148 -34 -158 Q -22 -150 -32 -76 Z"
+        <path d="M -60 -74 Q -70 -154 -36 -158 Q -14 -150 -28 -74 Z"
               fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
-        <path d="M  52 -76 Q  58 -148  34 -158 Q  22 -150  32 -76 Z"
+        <path d="M  60 -74 Q  70 -154  36 -158 Q  14 -150  28 -74 Z"
               fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
-        <path d="M -46 -82 Q -50 -140 -38 -146 Q -32 -140 -38 -82 Z" fill="#000"/>
-        <path d="M  46 -82 Q  50 -140  38 -146 Q  32 -140  38 -82 Z" fill="#000"/>
+        <path d="M -52 -80 Q -58 -140 -40 -146 Q -28 -140 -36 -80 Z" fill="#000"/>
+        <path d="M  52 -80 Q  58 -140  40 -146 Q  28 -140  36 -80 Z" fill="#000"/>
       `
                 },
                 {
                     id: 'devil', name: 'HORNS',
+                    // Like the cat ear, the base is a ~30°-tilted chord of the body
+                    // circle so it tucks under the curve. Curved horn sweeps out and up
+                    // to a sharp tip.
                     render: () => `
-        <path d="M -76 -76 Q -98 -126 -56 -140 Q -64 -110 -54 -82 Z"
+        <path d="M -82 -54 Q -118 -84 -100 -134 Q -78 -104 -38 -80 Z"
               fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
-        <path d="M  76 -76 Q  98 -126  56 -140 Q  64 -110  54 -82 Z"
+        <path d="M  82 -54 Q  118 -84  100 -134 Q  78 -104  38 -80 Z"
               fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
       `
                 },
                 {
                     id: 'elf', name: 'ELF',
+                    // Pointed leaf shapes with an inner ridge line (the concha fold) so
+                    // they read as distinctly elf/fae ears rather than plain points.
                     render: () => `
         <path d="M -84 -32 Q -148 -68 -118 -100 Q -82 -82 -74 -36 Z"
               fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
         <path d="M  84 -32 Q  148 -68  118 -100 Q  82 -82  74 -36 Z"
               fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+        <path d="M -90 -54 Q -120 -76 -112 -96" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M  90 -54 Q  120 -76  112 -96" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round"/>
       `
                 },
             ],
 
-            // Tails render BEHIND the body so the attachment is hidden. Closed shapes
-            // (stroke+fill) for the fat tails; thin ones keep that taper.
+            // Tails render BEHIND the body so the attachment is hidden. To break
+            // the all-right-side monotony, some tails are mirrored onto the LEFT via
+            // a scale(-1, 1) wrapper. Designs that read directionally (the spike row
+            // tapering toward its tip, the pitchfork prongs, etc.) work either side.
             tail: [
                 { id: 'none', name: 'NONE', render: () => '' },
                 {
                     id: 'cat', name: 'CAT',
-                    // Closed tapering S-curve — wider at the base, narrower at the tip.
+                    // Clean tapering S-curve. Right side.
                     render: () => `
         <path d="M 70 72
                  C 134 86 162 30 148 -22
@@ -735,54 +735,81 @@
                 },
                 {
                     id: 'straight', name: 'STRAIGHT',
+                    // Anchored on the lower-back of the body so a wide visible base
+                    // sits along the body's lower-right perimeter. Sweeps up and out
+                    // to a sharp tip — reads as a clear tapering "tail" shape.
                     render: () => `
-        <path d="M 70 78 Q 132 78 154 20 Q 158 -6 142 -4 Q 132 0 126 26 Q 110 60 70 60 Z"
+        <path d="M 50 70
+                 C 110 60 156 4 162 -32
+                 Q 172 -48 154 -42
+                 C 134 -32 100 -6 70 22
+                 C 46 38 38 56 50 70 Z"
               fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
       `
                 },
                 {
                     id: 'fox', name: 'FOX',
+                    // Bushy egg. Mirrored to the LEFT side for variety.
                     render: () => `
-        <path d="M 70 76 Q 96 90 136 80 Q 174 64 168 20 Q 158 -22 124 -12 Q 100 -2 88 28 Q 78 52 70 76 Z"
-              fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
-        <path d="M 148 -2 Q 160 8 156 26" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round"/>
-        <path d="M 132 -4 Q 140 6 134 22" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round"/>
+        <g transform="scale(-1 1)">
+          <path d="M 70 76 Q 96 90 136 80 Q 174 64 168 20 Q 158 -22 124 -12 Q 100 -2 88 28 Q 78 52 70 76 Z"
+                fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
+          <path d="M 148 -2 Q 160 8 156 26" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round"/>
+          <path d="M 132 -4 Q 140 6 134 22" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round"/>
+        </g>
       `
                 },
                 {
-                    id: 'devil', name: 'DEVIL',
-                    // Whip + arrow as a single closed path so they read as one shape.
+                    id: 'devil', name: 'FORK',
+                    // Jagged the full length — a bold zigzag "lightning bolt" drawn as a
+                    // double-stroked tube (black outer + white inner, like CURL) with
+                    // sharp mitered corners so every bend is a hard jagged point.
+                    render: () => {
+                        const d = 'M 84 52 L 134 44 L 120 18 L 150 2 L 134 -26 L 150 -50';
+                        return `
+          <path d="${d}" fill="none" stroke="#000" stroke-width="20" stroke-linejoin="miter" stroke-miterlimit="3" stroke-linecap="round"/>
+          <path d="${d}" fill="none" stroke="#fff" stroke-width="13" stroke-linejoin="miter" stroke-miterlimit="3" stroke-linecap="round"/>
+        `;
+                    }
+                },
+                {
+                    id: 'puff', name: 'PEARLS',
+                    // Chain of overlapping circles, growing toward a big puff at the tip.
+                    // Mirrored to the LEFT to vary the silhouette side.
+                    render: () => `
+        <g transform="scale(-1 1)">
+          <circle cx="80"  cy="80" r="8"  fill="#fff" stroke="#000" stroke-width="${STROKE}"/>
+          <circle cx="94"  cy="74" r="12" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>
+          <circle cx="114" cy="66" r="16" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>
+          <circle cx="138" cy="56" r="22" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>
+        </g>
+      `
+                },
+                {
+                    id: 'lizard', name: 'SPIKES',
+                    // Dragon/stegosaurus tail — curved baseline along the bottom, spike
+                    // peaks along the top edge, tapering from tip back to body.
                     render: () => `
         <path d="M 70 88
-                 Q 122 100 138 60
-                 L 158 56
-                 L 142 42
-                 L 158 22
-                 L 132 30
-                 L 144 50
-                 Q 130 56 124 64
-                 Q 110 78 70 76 Z"
-              fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
-      `
-                },
-                {
-                    id: 'puff', name: 'PUFF',
-                    render: () => `<circle cx="98" cy="86" r="24" fill="#fff" stroke="#000" stroke-width="${STROKE}"/>`
-                },
-                {
-                    id: 'lizard', name: 'LIZARD',
-                    render: () => `
-        <path d="M 64 88 Q 132 116 158 56 Q 162 26 148 8 Q 142 0 138 8 Q 146 24 144 50 Q 130 88 70 76 Z"
+                 C 110 102 148 90 162 38
+                 L 158 28
+                 L 146 -4
+                 L 138 30
+                 L 124 0
+                 L 116 30
+                 L 102 6
+                 L 94 32
+                 L 80 14
+                 L 72 32
+                 L 68 22
+                 C 56 56 62 76 70 88 Z"
               fill="#fff" stroke="#000" stroke-width="${STROKE}" stroke-linejoin="round"/>
       `
                 },
                 {
                     id: 'curl', name: 'CURL',
-                    // A bona fide spiral. Outline-effect via double-stroke (black outer +
-                    // white inner) so it reads as a curled tube even on the white stage.
+                    // Spiral via double-stroke (black outer + white inner). Mirrored LEFT.
                     render: () => {
-                        // Start of tail at body's right; spiral arc rising up + curling.
-                        // We hand-build a single thickened curve as two parallel paths.
                         const d = `M 70 76
                    C 130 92 158 50 156 6
                    C 154 -36 116 -50 96 -28
@@ -791,8 +818,10 @@
                    C 104 -22 102 -14 108 -10
                    C 114 -8 116 -16 110 -16`;
                         return `
-          <path d="${d}" fill="none" stroke="#000" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="${d}" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+          <g transform="scale(-1 1)">
+            <path d="${d}" fill="none" stroke="#000" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="${d}" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+          </g>
         `;
                     }
                 },
@@ -833,21 +862,22 @@
             const overlayRight = eyesPart.overlay ? eyesPart.overlay(EYE_CX, EYE_CY, true) : '';
 
             // Render order (back → front):
-            //   tail → body (fill+pattern+stroke) → ears → eyes
-            // Tails are behind the body so the attachment is hidden; ears are in FRONT
-            // so their white interiors are visible against the body where they overlap.
+            //   tail → ears → body (fill+pattern+stroke) → eyes
+            // Both tail and ears are behind the body so the attachment is hidden and
+            // the body's silhouette is unbroken. Outlined ear shapes read as line-art
+            // above the head; inner-ear details poke through where they extend past
+            // the body's edge.
             charGroup.innerHTML = `
     <defs>
       <clipPath id="body-clip"><circle cx="0" cy="0" r="${BODY_R - 0.5}"/></clipPath>
     </defs>
 
     <g class="tail">${tailPart.render()}</g>
+    <g class="ears">${earsPart.render()}</g>
 
     <circle cx="0" cy="0" r="${BODY_R}" fill="#000"/>
     <g clip-path="url(#body-clip)">${bodyPart.pattern}</g>
     <circle cx="0" cy="0" r="${BODY_R}" fill="none" stroke="#000" stroke-width="${STROKE}"/>
-
-    <g class="ears">${earsPart.render()}</g>
 
     <g class="eyes" id="eyes-group">
       ${eyesPart.render(-EYE_CX, EYE_CY, false)}
