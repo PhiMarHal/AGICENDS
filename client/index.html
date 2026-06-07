@@ -575,12 +575,13 @@
 
         #profile-header {
             margin-top: 8px;
-            font-size: 14px;
+            font-size: 16px;
+            text-align: center;
         }
 
         #profile-displayname {
             color: #ffd54f;
-            font-size: 16px;
+            font-size: 18px;
             margin-bottom: 2px;
         }
 
@@ -688,13 +689,61 @@
             border-color: #fff;
         }
 
+        /* The thumbnail gets the same full-width separator above it, so there
+           is exactly one bar between the stats block and the character. */
+        #profile-character-wrap {
+            border-top: 1px solid #333;
+            margin-top: 16px;
+            padding-top: 16px;
+        }
+
+        /* The section's top-border separator moves onto this flex header so
+           it spans full width; the h3 keeps only its type styling. */
+        .profile-matches-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-top: 1px solid #333;
+            padding-top: 12px;
+            margin: 16px 0 6px 0;
+        }
+
+        #profile-panel .profile-matches-head h3 {
+            margin: 0;
+            border-top: none;
+            padding-top: 0;
+        }
+
+        #profile-matches-toggle {
+            background: transparent;
+            border: none;
+            color: #888;
+            font-size: 14px;
+            line-height: 1;
+            cursor: pointer;
+            padding: 4px 6px;
+            transition: color .12s, transform .12s;
+        }
+
+        #profile-matches-toggle:hover {
+            color: #fff;
+        }
+
+        #profile-matches-toggle.expanded {
+            transform: rotate(180deg);
+        }
+
         #profile-matches {
-            min-height: 180px;
-            max-height: 180px;
             overflow-y: auto;
             border: 1px solid #222;
             border-radius: 4px;
             padding: 4px 8px;
+        }
+
+        /* Collapsed: sizes to the 3 rendered rows. Expanded: up to 12 rows,
+           scrolling if the list is taller. */
+        #profile-matches.expanded {
+            max-height: 260px;
         }
 
         .profile-match-row {
@@ -1615,7 +1664,6 @@
     <div id="profile-overlay">
         <div id="profile-panel">
             <div id="profile-close" title="Close">×</div>
-            <h2>Profile</h2>
             <div id="profile-header">
                 <div id="profile-displayname">…</div>
                 <div id="profile-mmr">…</div>
@@ -1659,12 +1707,16 @@
 
             <!-- Character look: tappable preview that opens the creator. -->
             <div id="profile-character-wrap"
-                style="display:flex;flex-direction:column;align-items:center;margin:18px 0;cursor:pointer;">
-                <div id="profile-character" title="Customize character" style="width:148px;height:148px;"></div>
+                style="display:flex;flex-direction:column;align-items:center;margin-bottom:8px;cursor:pointer;">
+                <div id="profile-character" title="Customize character"
+                    style="width:148px;height:148px;background:#fff;border-radius:6px;"></div>
                 <div style="font-size:10px;letter-spacing:0.18em;color:#8a8a8a;margin-top:6px;">TAP TO CUSTOMIZE</div>
             </div>
 
-            <h3>Recent matches</h3>
+            <div class="profile-matches-head">
+                <h3>Recent matches</h3>
+                <button id="profile-matches-toggle" type="button" aria-label="Show more matches">&#9662;</button>
+            </div>
             <div id="profile-mode-toggle">
                 <button class="profile-mode-btn active" data-mode="devils">DEVILS</button>
                 <button class="profile-mode-btn" data-mode="angels">ANGELS</button>
@@ -2739,6 +2791,16 @@
         // Match history
         const profileModeBtns = document.querySelectorAll('.profile-mode-btn');
         const profileMatches = document.getElementById('profile-matches');
+        const profileMatchesToggle = document.getElementById('profile-matches-toggle');
+        let profileMatchesExpanded = false;   // false → show 3, true → show 12
+        let profileMatchesAll = [];           // full list from the last fetch
+        let profileMatchesRenderMode = 'devils';
+        if (profileMatchesToggle) {
+            profileMatchesToggle.addEventListener('click', () => {
+                profileMatchesExpanded = !profileMatchesExpanded;
+                renderProfileMatches(profileMatchesAll, profileMatchesRenderMode);
+            });
+        }
 
         // Account
         const profilePwStatus = document.getElementById('profile-pw-status');
@@ -3034,7 +3096,7 @@
             if (!token) return;
             try {
                 const res = await fetch(
-                    AUTH_WORKER_URL + '/me/matches?mode=' + profileMatchMode + '&limit=20',
+                    AUTH_WORKER_URL + '/me/matches?mode=' + profileMatchMode + '&limit=12',
                     { headers: { authorization: 'Bearer ' + token } },
                 );
                 if (!res.ok) {
@@ -3051,13 +3113,24 @@
         }
 
         function renderProfileMatches(matches, mode) {
+            // Remember the full list + mode so the expand arrow can re-render
+            // (3 collapsed ↔ 12 expanded) without another network round-trip.
+            profileMatchesAll = matches;
+            profileMatchesRenderMode = mode;
+            if (profileMatchesToggle) {
+                // Nothing to expand to when there are 2 or fewer matches.
+                profileMatchesToggle.style.display = matches.length > 2 ? '' : 'none';
+                profileMatchesToggle.classList.toggle('expanded', profileMatchesExpanded);
+            }
             if (!matches.length) {
                 profileMatches.innerHTML =
                     '<div class="profile-empty">No matches yet.</div>';
                 return;
             }
+            profileMatches.classList.toggle('expanded', profileMatchesExpanded);
+            const shown = matches.slice(0, profileMatchesExpanded ? 12 : 2);
             const frag = document.createDocumentFragment();
-            for (const m of matches) {
+            for (const m of shown) {
                 const row = document.createElement('div');
                 // mode class on the row preserves semantics for the
                 // click handler (Devils vs Angels detail rendering).
@@ -4280,7 +4353,6 @@
                 const sprite = this.add.image(CANVAS_WIDTH / 2, CANVAS_HEIGHT - 200, 'player');
                 sprite.setScale(PLAYER_BASE_SCALE);
                 sprite.setDepth(10);
-                if (!isMe) sprite.setAlpha(0.65);
 
                 const eyeWidth = 42, eyeHeight = 29;
                 const outlineColor = 0x000000, outlineThickness = 3;
@@ -4297,7 +4369,6 @@
                 const eyesContainer = this.add.container(CANVAS_WIDTH / 2, CANVAS_HEIGHT - 200,
                     [eyeLeft, eyeRight, pupilLeft, pupilRight]);
                 eyesContainer.setDepth(11);
-                if (!isMe) eyesContainer.setAlpha(0.65);
 
                 // Name label floating above the character. Same font as the
                 // proximity indicator for visual consistency. Lives in world
@@ -4308,7 +4379,6 @@
                     fontFamily: 'Arial', fontSize: '21px', fontStyle: 'bold',
                     color: '#000000', stroke: '#ffffff', strokeThickness: 3,
                 }).setOrigin(0.5, 0.5).setDepth(12);
-                if (!isMe) nameText.setAlpha(0.65);
 
                 return {
                     sprite, eyesContainer, nameText,
@@ -5127,8 +5197,19 @@
 
                         const wasAlive = this.previousAlive.get(id);
                         if (wasAlive !== false && p.alive === false) {
-                            v.sprite.setTint(0xff0000);
+                            // Pure black-and-white death: vanish instantly and
+                            // throw a flurry of the same particles used for an
+                            // object hit, jittered around the death point so it
+                            // reads as the character shattering apart.
+                            v.sprite.setVisible(false);
                             v.eyesContainer.setVisible(false);
+                            if (v.nameText) v.nameText.setVisible(false);
+                            for (let burst = 0; burst < 16; burst++) {
+                                this.spawnParticles(
+                                    p.x + (Math.random() - 0.5) * 36,
+                                    p.y + (Math.random() - 0.5) * 36,
+                                );
+                            }
                             // Transition to spectating 2 s after dying (if not already spectating)
                             if (!this.isSpectating && !this.spectateOnDeathTimer) {
                                 this.spectateOnDeathTimer = this.time.delayedCall(2000, () => {
@@ -5147,8 +5228,9 @@
                             // otherwise the camera stays parked on whoever
                             // was being spectated and the player can't see
                             // themselves come back.
-                            v.sprite.clearTint();
+                            v.sprite.setVisible(true);
                             v.eyesContainer.setVisible(true);
+                            if (v.nameText) v.nameText.setVisible(true);
                             if (id === mySessionId) {
                                 if (this.spectateOnDeathTimer) {
                                     this.spectateOnDeathTimer.remove(false);
@@ -5657,8 +5739,17 @@
 
                     const wasAlive = this.previousAlive.get(id);
                     if (wasAlive !== false && sample.alive === false) {
-                        v.sprite.setTint(0xff0000);
+                        // Same instant-vanish + particle burst as the snapshot
+                        // death path. previousAlive ensures only one path fires.
+                        v.sprite.setVisible(false);
                         v.eyesContainer.setVisible(false);
+                        if (v.nameText) v.nameText.setVisible(false);
+                        for (let burst = 0; burst < 16; burst++) {
+                            this.spawnParticles(
+                                sample.x + (Math.random() - 0.5) * 36,
+                                sample.y + (Math.random() - 0.5) * 36,
+                            );
+                        }
                     } else if (wasAlive === false && sample.alive === true) {
                         // Interp caught up to a post-resurrection sample —
                         // clear the death visuals. Without this branch the
@@ -5666,8 +5757,9 @@
                         // stale alive=false sample and leave the player
                         // looking dead even after the server brought them
                         // back.
-                        v.sprite.clearTint();
+                        v.sprite.setVisible(true);
                         v.eyesContainer.setVisible(true);
+                        if (v.nameText) v.nameText.setVisible(true);
                     }
                     this.previousAlive.set(id, sample.alive);
                 }
