@@ -226,6 +226,7 @@ router.get('/me/profile', auth.meProfile);
 router.get('/me/matches', auth.meMatches);
 router.get('/me/match/:id', auth.meMatchDetail);
 router.post('/me/set-password', auth.meSetPassword);
+router.post('/me/appearance', auth.meAppearance);
 router.post('/me/link-wallet/verify', auth.meLinkWalletVerify);
 router.post('/me/unlink-wallet', auth.meUnlinkWallet);
 

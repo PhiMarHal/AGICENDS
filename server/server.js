@@ -495,6 +495,7 @@ function makePlayer(id) {
         id,
         userId: null,         // set by connection handler if the client authenticated
         displayName: null,    // ditto
+        appearance: null,     // set by connection handler if the client authenticated
         x: SIM.CANVAS_WIDTH / 2,
         y: SIM.CANVAS_HEIGHT - SIM.START_Y_OFFSET,
         vx: 0, vy: 0,
@@ -1107,6 +1108,7 @@ function buildSnapshot(match) {
     for (const p of match.players.values()) {
         const entry = {
             displayName: p.displayName,   // null for anon; client falls back to p.id
+            appearance: p.appearance,     // null = default look; client renders accordingly
             x: p.x, y: p.y, vx: p.vx, vy: p.vy,
             alive: p.alive, facingRight: p.facingRight,
             score: angelsTeamScore != null ? angelsTeamScore : p.score,
@@ -1283,7 +1285,7 @@ async function verifyAuthToken(token) {
         });
         const data = await res.json();
         if (data && data.ok && data.user) {
-            return { id: data.user.id, display_name: data.user.display_name, mmr: data.user.mmr };
+            return { id: data.user.id, display_name: data.user.display_name, mmr: data.user.mmr, appearance: data.user.appearance || null };
         }
     } catch (err) {
         console.warn('[auth] verify error:', err.message);
@@ -1458,6 +1460,7 @@ wss.on('connection', async (ws, request) => {
     if (authedUser) {
         player.userId = authedUser.id;
         player.displayName = authedUser.display_name;
+        player.appearance = authedUser.appearance;
     }
 
     console.log(`[server] ${sessionId} joined ${mode} as ${authedUser ? authedUser.display_name : 'anon'} (${match.players.size} total, round=${match.roundState})`);

@@ -156,9 +156,11 @@ export async function handleVerify(request, env) {
         return json({ ok: false, error: 'user_unavailable' }, 401);
     }
 
+    const appearance = await fetchAppearance(env, user.id);
+
     return json({
         ok: true,
-        user: { id: user.id, display_name: user.display_name, mmr: user.mmr },
+        user: { id: user.id, display_name: user.display_name, mmr: user.mmr, appearance },
     });
 }
 
@@ -923,6 +925,8 @@ export async function meProfile(request, env) {
         console.warn('peak_mmr lookup failed (column may not exist yet):', err.message);
     }
 
+    const appearance = await fetchAppearance(env, user.id);
+
     return json({
         user: {
             id: user.id,
@@ -933,7 +937,85 @@ export async function meProfile(request, env) {
         has_password: hasBespoke,
         wallet_address: ethRow ? ethRow.external_id : null,
         stats,
+        appearance,
     });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// §APPEARANCE — character customisation
+// ════════════════════════════════════════════════════════════════════════════
+//
+// A player's look is five short strings, each an ID from the shared
+// character catalog (character.js on the client). Stored as a JSON string
+// in users.appearance; NULL means "never customised → default look". The
+// game server reads it via /auth/verify and rebroadcasts it in snapshots,
+// so every client renders every player.
+//
+//   POST /me/appearance   { body, eyes, pupils, ears, tail }
+//     → 200 { ok: true, appearance: {...} }
+//     → 400 { error: 'invalid_appearance' }   if any field isn't a known ID
+//
+// Validation happens HERE, not just in the lab UI: these strings get
+// rendered into SVG on every other player's screen, so an unrecognised
+// value must never reach a client.
+
+// Allowed IDs per slot — keep in sync with character.js's PARTS catalog.
+const APPEARANCE_CATALOG = {
+    body: ['solid', 'spots', 'stripes', 'half', 'check', 'star', 'crescent'],
+    eyes: ['cat', 'round', 'wide', 'almond', 'droopy', 'squint', 'diamond', 'oval-tall'],
+    pupils: ['slit', 'dot', 'dot-big', 'heart', 'star', 'cross', 'diamond', 'spiral', 'none'],
+    ears: ['none', 'cat', 'bear', 'floppy', 'bunny', 'devil', 'elf'],
+    tail: ['none', 'cat', 'straight', 'fox', 'devil', 'puff', 'lizard', 'curl'],
+};
+const APPEARANCE_SLOTS = Object.keys(APPEARANCE_CATALOG);
+
+// Returns a clean {body,eyes,pupils,ears,tail} object if EVERY slot is a
+// known ID, else null. Extra keys are dropped; there are no partial saves.
+function validateAppearance(obj) {
+    if (!obj || typeof obj !== 'object') return null;
+    const clean = {};
+    for (const slot of APPEARANCE_SLOTS) {
+        const v = obj[slot];
+        if (typeof v !== 'string' || !APPEARANCE_CATALOG[slot].includes(v)) return null;
+        clean[slot] = v;
+    }
+    return clean;
+}
+
+// Parse a stored appearance JSON string into a validated object, or null.
+// Malformed JSON or now-unknown IDs collapse to null (→ default look).
+function safeParseAppearance(raw) {
+    if (!raw) return null;
+    try { return validateAppearance(JSON.parse(raw)); }
+    catch (_) { return null; }
+}
+
+// Read a user's stored appearance. Wrapped in try/catch so a DB that hasn't
+// had the `appearance` column added yet returns null instead of 500-ing —
+// same defensive posture as the peak_mmr fallback in meProfile.
+async function fetchAppearance(env, userId) {
+    try {
+        const row = await one(env, 'SELECT appearance FROM users WHERE id = ?', userId);
+        return row ? safeParseAppearance(row.appearance) : null;
+    } catch (err) {
+        console.warn('appearance lookup failed (column may not exist yet):', err.message);
+        return null;
+    }
+}
+
+// POST /me/appearance — save the logged-in user's character look.
+export async function meAppearance(request, env) {
+    const a = await requireAuth(request, env);
+    if (a.response) return a.response;
+
+    const clean = validateAppearance(await safeJson(request));
+    if (!clean) return json({ error: 'invalid_appearance' }, 400);
+
+    await run(env,
+        'UPDATE users SET appearance = ? WHERE id = ?',
+        JSON.stringify(clean), a.user.id,
+    );
+    return json({ ok: true, appearance: clean });
 }
 
 export async function meMatches(request, env) {

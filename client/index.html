@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>AGISCENDS</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.87.0/dist/phaser.min.js"></script>
+    <script src="character.js"></script>
     <style>
         html,
         body {
@@ -1656,6 +1657,13 @@
                 </div>
             </div>
 
+            <!-- Character look: tappable preview that opens the creator. -->
+            <div id="profile-character-wrap"
+                style="display:flex;flex-direction:column;align-items:center;margin:18px 0;cursor:pointer;">
+                <div id="profile-character" title="Customize character" style="width:148px;height:148px;"></div>
+                <div style="font-size:10px;letter-spacing:0.18em;color:#8a8a8a;margin-top:6px;">TAP TO CUSTOMIZE</div>
+            </div>
+
             <h3>Recent matches</h3>
             <div id="profile-mode-toggle">
                 <button class="profile-mode-btn active" data-mode="devils">DEVILS</button>
@@ -2966,6 +2974,12 @@
                     profileWalletBtn.title = '';
                 }
 
+                // Character look — render the saved appearance as the
+                // tappable preview (falls back to the default look if the
+                // user has never customised).
+                profileAppearance = data.appearance || null;
+                renderProfileCharacter();
+
                 // Keep menu MMR in sync if it changed (e.g. just earned
                 // a Devils win and reopened the profile).
                 if (currentUser) {
@@ -2977,6 +2991,43 @@
                 // already shown. The user can close and reopen.
             }
         }
+
+        // ---- character appearance: profile preview + creator + save -----------
+        const profileCharacterWrap = document.getElementById('profile-character-wrap');
+        const profileCharacterEl = document.getElementById('profile-character');
+        let profileAppearance = null;
+
+        function renderProfileCharacter() {
+            if (!profileCharacterEl || !window.Character) return;
+            profileCharacterEl.innerHTML = window.Character.buildCharacterSVG(profileAppearance, 'full');
+        }
+
+        function openCharacterCreator() {
+            if (!window.Character) return;
+            window.Character.openCreator({
+                initial: profileAppearance,
+                onSave: async (appearance) => {
+                    profileAppearance = appearance;
+                    renderProfileCharacter();
+                    const token = getStoredToken();
+                    if (!token) return;
+                    try {
+                        const res = await fetch(AUTH_WORKER_URL + '/me/appearance', {
+                            method: 'POST',
+                            headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },
+                            body: JSON.stringify(appearance),
+                        });
+                        if (!res.ok) return;
+                        // Reconnect so the game server re-reads our look via
+                        // /auth/verify and broadcasts it to every other client.
+                        if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+                        connect();
+                    } catch (_) { /* network blip — local preview already updated */ }
+                },
+            });
+        }
+
+        if (profileCharacterWrap) profileCharacterWrap.addEventListener('click', openCharacterCreator);
 
         async function loadProfileMatches() {
             const token = getStoredToken();
@@ -3648,6 +3699,11 @@
         const BLOCK_RENDER_SIZE = 90;
         const COIN_SIZE = 45;
         const PLAYER_BASE_SCALE = 1.2;
+        // The body bakes at 96px so 1 character-viewBox-unit = 0.36px on screen
+        // (96/320 * PLAYER_BASE_SCALE). The pupil layer bakes from an 80-unit
+        // viewBox to 64px (0.8px/unit); this scale brings tracked custom pupils
+        // to the same 0.36px/unit, lining them up with the baked eye-whites.
+        const PUPIL_TEX_SCALE = 0.45;
         const WORLD_HEIGHT_UP = 10000000;
 
         const SIM = {
@@ -4249,6 +4305,8 @@
                     currentPupil: { x: 0, y: 0 }, targetPupil: { x: 0, y: 0 },
                     lastVx: 0,
                     lastNameText: '',
+                    appearanceKey: null,   // which baked look is on the sprite
+                    cPupilLeft: null, cPupilRight: null,  // tracked custom-pupil sprites
                 };
             }
 
@@ -5004,7 +5062,7 @@
                         continue;
                     }
 
-                    this.latestPlayerData.set(id, { x: p.x, y: p.y, alive: p.alive, displayName: p.displayName });
+                    this.latestPlayerData.set(id, { x: p.x, y: p.y, alive: p.alive, displayName: p.displayName, appearance: p.appearance });
                     let v = this.playerVisuals.get(id);
                     if (!v) {
                         v = this.createPlayerVisual(id, isMe);
@@ -5016,6 +5074,8 @@
                             }
                         }
                     }
+
+                    if (window.Character) this.applyAppearance(v, p.appearance);
 
                     // Keep the floating name label in sync with the player's
                     // current display name. setText is a no-op if the string
@@ -5174,6 +5234,90 @@
                         }
                     }
                 }
+            }
+
+            // Bake an SVG string into a Phaser canvas texture, cached by
+            // key. Async (Image load): calls cb(key) when ready, cb(null) on
+            // failure. This turns a character SVG into a real GPU texture.
+            bakeSvgTexture(key, svg, size, cb) {
+                if (this.textures.exists(key)) { cb(key); return; }
+                const img = new Image();
+                img.onload = () => {
+                    if (!this.textures.exists(key)) {
+                        const c = document.createElement('canvas');
+                        c.width = size; c.height = size;
+                        c.getContext('2d').drawImage(img, 0, 0, size, size);
+                        this.textures.addCanvas(key, c);
+                    }
+                    cb(key);
+                };
+                img.onerror = () => cb(null);
+                img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+            }
+
+            // Apply a player's saved appearance to their visual.
+            //
+            // Anonymous / default-look players are left completely untouched:
+            // the built-in 'player' body texture, the ellipse eye-whites and
+            // the rectangle pupils all keep their original animated behaviour.
+            //
+            // Customised players get the BODY layer (body + pattern + ears +
+            // tail + eye-whites, but NO pupils) baked onto the sprite at 96px,
+            // so the body radius still matches 'player' and playFlapJuice's
+            // scale maths is unchanged. The default ellipse-whites and rect
+            // pupils are hidden, and the chosen pupil shape is rendered as two
+            // tracked image sprites parented to the same eyesContainer. The
+            // per-frame eye loop drives those pupils, so customised characters
+            // keep the live eye-tracking over their baked whites.
+            applyAppearance(v, appearance) {
+                if (!window.Character) return;
+                const clean = window.Character.validate(appearance);
+                const key = clean.body + '_' + clean.eyes + '_' + clean.pupils + '_' + clean.ears + '_' + clean.tail;
+                if (v.appearanceKey === key) return;
+                v.appearanceKey = key;
+
+                const def = window.Character.DEFAULT_STATE;
+                const isDefault = clean.body === def.body && clean.eyes === def.eyes &&
+                    clean.pupils === def.pupils && clean.ears === def.ears &&
+                    clean.tail === def.tail;
+
+                if (isDefault) {
+                    if (v.sprite && v.sprite.active) v.sprite.setTexture('player');
+                    v.eyeLeft.visible = true; v.eyeRight.visible = true;
+                    v.pupilLeft.visible = true; v.pupilRight.visible = true;
+                    if (v.cPupilLeft) v.cPupilLeft.visible = false;
+                    if (v.cPupilRight) v.cPupilRight.visible = false;
+                    return;
+                }
+
+                // Customised: hide the built-in eyes (whites are baked in).
+                v.eyeLeft.visible = false; v.eyeRight.visible = false;
+                v.pupilLeft.visible = false; v.pupilRight.visible = false;
+
+                // Body + eye-whites, no pupils.
+                const bodyKey = 'charbody_' + clean.body + '_' + clean.eyes + '_' + clean.ears + '_' + clean.tail;
+                this.bakeSvgTexture(bodyKey, window.Character.buildCharacterSVG(clean, 'body'), 96, (k) => {
+                    if (k && v.sprite && v.sprite.active) v.sprite.setTexture(k);
+                });
+
+                // Chosen pupil shape → tracked image sprites in the eyesContainer.
+                const pupKey = 'charpupil_' + clean.pupils;
+                this.bakeSvgTexture(pupKey, window.Character.buildCharacterSVG(clean, 'pupil'), 64, (k) => {
+                    if (!k || !v.eyesContainer || !v.eyesContainer.active) return;
+                    if (!v.cPupilLeft) {
+                        v.cPupilLeft = this.add.image(-24, -4, k).setScale(PUPIL_TEX_SCALE);
+                        v.cPupilRight = this.add.image(24, -4, k).setScale(PUPIL_TEX_SCALE);
+                        // Parented to eyesContainer so they inherit its depth,
+                        // its non-self dimming alpha, and its death/resurrect
+                        // visibility toggles for free.
+                        v.eyesContainer.add([v.cPupilLeft, v.cPupilRight]);
+                    } else {
+                        v.cPupilLeft.setTexture(k);
+                        v.cPupilRight.setTexture(k);
+                    }
+                    v.cPupilLeft.visible = true;
+                    v.cPupilRight.visible = true;
+                });
             }
 
             playFlapJuice(v) {
@@ -5648,6 +5792,14 @@
                     v.pupilLeft.y = v.eyeLeft.y + v.currentPupil.y;
                     v.pupilRight.x = v.eyeRight.x + v.currentPupil.x;
                     v.pupilRight.y = v.eyeRight.y + v.currentPupil.y;
+                    // Custom pupils (when present) mirror the default pupils'
+                    // computed positions — same tracking, over the baked whites.
+                    if (v.cPupilLeft) {
+                        v.cPupilLeft.x = v.pupilLeft.x;
+                        v.cPupilLeft.y = v.pupilLeft.y;
+                        v.cPupilRight.x = v.pupilRight.x;
+                        v.cPupilRight.y = v.pupilRight.y;
+                    }
                 }
 
                 if (this.spikes) {

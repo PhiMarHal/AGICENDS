@@ -23,11 +23,20 @@ CREATE TABLE IF NOT EXISTS users (
     status          TEXT    NOT NULL DEFAULT 'active',
     mmr             INTEGER NOT NULL DEFAULT 1500,             -- pairwise-Elo skill rating
     peak_mmr        INTEGER NOT NULL DEFAULT 1500,             -- lifetime peak (never decreases)
+    appearance      TEXT,                                      -- JSON character look {body,eyes,pupils,ears,tail}; NULL = default
     created_at      INTEGER NOT NULL                          -- unix epoch ms
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_display_name
     ON users(display_name);
+
+-- One-time migration for databases created before the `appearance` column
+-- existed. The CREATE TABLE above only fires on a FRESH database (IF NOT
+-- EXISTS), so an already-deployed D1 needs the column added explicitly.
+-- SQLite has no "ADD COLUMN IF NOT EXISTS", so re-running this after it has
+-- already been applied errors with "duplicate column name" — harmless, it
+-- just means you're already migrated. Run once per environment:
+--   wrangler d1 execute agiscends --remote --command "ALTER TABLE users ADD COLUMN appearance TEXT"
 
 -- ── auth_identities ────────────────────────────────────────────────────
 -- One row per (provider, external_id) tuple. A single user can have
