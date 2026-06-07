@@ -836,6 +836,11 @@
         validate,
         buildCharacterSVG,
         openCreator,
+        // Geometry the in-game renderer needs to place tracked pupils over baked
+        // eye-whites. Values are in the character's own viewBox units; the game
+        // converts them to on-screen px. pupilViewBox is the size of the 'pupil'
+        // layer's viewBox (see buildCharacterSVG, layer 'pupil').
+        METRICS: { viewBox: 320, bodyR: BODY_R, eyeCx: EYE_CX, eyeCy: EYE_CY, pupilViewBox: 80 },
     };
 
     global.Character = Character;
