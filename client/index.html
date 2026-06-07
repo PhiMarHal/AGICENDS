@@ -542,6 +542,19 @@
             box-sizing: border-box;
         }
 
+        /* Desktop only: reserve the expanded-matches height up front and keep a
+           permanent scrollbar gutter. Expanding Recent matches then fills the
+           reserved space instead of growing the modal, and the always-present
+           gutter stops the contents from shifting sideways when a scrollbar
+           appears. Phones use overlay scrollbars and a narrower panel, where
+           this isn't an issue — they keep the natural auto-height behaviour. */
+        @media (min-width: 480px) {
+            #profile-panel {
+                min-height: min(860px, 90vh);
+                scrollbar-gutter: stable;
+            }
+        }
+
         #profile-panel h2 {
             margin: 0 0 4px 0;
             font-size: 16px;
@@ -3118,8 +3131,8 @@
             profileMatchesAll = matches;
             profileMatchesRenderMode = mode;
             if (profileMatchesToggle) {
-                // Nothing to expand to when there are 2 or fewer matches.
-                profileMatchesToggle.style.display = matches.length > 2 ? '' : 'none';
+                // Nothing to expand to when there are 4 or fewer matches.
+                profileMatchesToggle.style.display = matches.length > 4 ? '' : 'none';
                 profileMatchesToggle.classList.toggle('expanded', profileMatchesExpanded);
             }
             if (!matches.length) {
@@ -3128,7 +3141,7 @@
                 return;
             }
             profileMatches.classList.toggle('expanded', profileMatchesExpanded);
-            const shown = matches.slice(0, profileMatchesExpanded ? 12 : 2);
+            const shown = matches.slice(0, profileMatchesExpanded ? 12 : 4);
             const frag = document.createDocumentFragment();
             for (const m of shown) {
                 const row = document.createElement('div');
