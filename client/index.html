@@ -3785,6 +3785,8 @@
         const BLOCK_RENDER_SIZE = 90;
         const COIN_SIZE = 45;
         const PLAYER_BASE_SCALE = 1.2;
+        const POWERUP_TYPES = ['mult', 'vacuum', 'ghost', 'secondWind'];
+        const POWERUP_ICON = 56;   // world pickup base size (px)
         // Custom characters bake the body (incl. eye-whites) at 96px from the
         // character's 320-unit viewBox, drawn at PLAYER_BASE_SCALE — so one
         // character viewBox unit equals UNIT_PX on screen. This converts the
@@ -3942,6 +3944,7 @@
                 this.playerVisuals = new Map();
                 this.blockSprites = new Map();
                 this.coinSprites = new Map();
+                this.powerupSprites = new Map();
                 this.sideWallSprites = [];
                 this.pentagonSprites = new Map();
                 this.hexagonPairSprites = new Map();
@@ -4094,6 +4097,8 @@
                 ptG.fillRect(0, 0, 8, 8);
                 ptG.generateTexture('particle', 8, 8);
                 ptG.destroy();
+
+                this.createPowerupTextures();
 
                 const wG = this.make.graphics();
                 wG.fillStyle(cPrimary);
@@ -4400,6 +4405,7 @@
                     currentPupil: { x: 0, y: 0 }, targetPupil: { x: 0, y: 0 },
                     lastVx: 0,
                     lastNameText: '',
+                    fx: null,   // lazily-built powerup effect overlays (see ensurePlayerFx)
                     appearanceKey: null,   // which baked look is on the sprite
                     cPupilLeft: null, cPupilRight: null,  // tracked custom-pupil sprites
                     pupilMaxX: 0, pupilMaxY: 0,            // this eye's pupil travel (px)
@@ -4411,6 +4417,7 @@
                 v.sprite.destroy();
                 v.eyesContainer.destroy();
                 if (v.nameText) v.nameText.destroy();
+                if (v.fx) { for (const o of Object.values(v.fx)) o.destroy(); v.fx = null; }
             }
 
             resetAllVisualState() {
@@ -4418,6 +4425,8 @@
                 this.blockSprites.clear();
                 for (const s of this.coinSprites.values()) s.destroy();
                 this.coinSprites.clear();
+                for (const s of this.powerupSprites.values()) s.destroy();
+                this.powerupSprites.clear();
                 for (const s of this.sideWallSprites) s.destroy();
                 this.sideWallSprites = [];
                 for (const s of this.pentagonSprites.values()) s.destroy();
@@ -4475,6 +4484,7 @@
 
                 for (const b of msg.blocks) this.spawnBlockSprite(b);
                 for (const c of msg.coins) this.spawnCoinSprite(c);
+                if (msg.powerups) for (const pu of msg.powerups) this.spawnPowerupSprite(pu);
                 for (const seg of msg.sideWallSegments) this.spawnSideWallSegment(seg);
                 if (msg.pentagons) for (const p of msg.pentagons) this.spawnPentagonSprite(p);
                 if (msg.hexagonPairs) for (const h of msg.hexagonPairs) this.spawnHexagonPairSprite(h);
@@ -4496,6 +4506,147 @@
                 sprite.setDisplaySize(COIN_SIZE, COIN_SIZE).setDepth(3);
                 this.coinSprites.set(c.id, sprite);
                 this.tweens.add({ targets: sprite, angle: 360, duration: 1200, repeat: -1 });
+            }
+
+            // Generate the powerup icon textures once (white fill, dark outline).
+            // pu_mult (rhombus), pu_magnet (single horseshoe), pu_vacuum (double,
+            // for world/HUD), pu_ghost (circle), pu_sun (rays+centre, world/HUD),
+            // pu_halo (rays only, transparent centre, for the character).
+            createPowerupTextures() {
+                const W = 0xffffff, K = 0x000000;
+
+                { // mult — Ethereum-ish rhombus
+                    const g = this.make.graphics();
+                    const c = 48, hw = 26, hh = 40;
+                    const dia = [{ x: c, y: c - hh }, { x: c + hw, y: c }, { x: c, y: c + hh }, { x: c - hw, y: c }];
+                    g.fillStyle(W); g.lineStyle(5, K);
+                    g.fillPoints(dia, true); g.strokePoints(dia, true);
+                    g.lineStyle(3, K);
+                    g.lineBetween(c - hw, c, c + hw, c);
+                    g.strokePoints([{ x: c - hw * 0.6, y: c - 6 }, { x: c, y: c + 8 }, { x: c + hw * 0.6, y: c - 6 }], false);
+                    g.generateTexture('pu_mult', 96, 96); g.destroy();
+                }
+
+                const drawMagnet = (g, cx, cy, sc) => {   // horseshoe opening up
+                    const r = 20 * sc, by = cy + 8 * sc, legTop = cy - 30 * sc, steps = 18;
+                    const pts = [{ x: cx - r, y: legTop }];
+                    for (let i = 0; i <= steps; i++) { const a = Math.PI * (1 - i / steps); pts.push({ x: cx + r * Math.cos(a), y: by + r * Math.sin(a) }); }
+                    pts.push({ x: cx + r, y: legTop });
+                    g.lineStyle(16 * sc, K); g.strokePoints(pts, false);
+                    g.lineStyle(8 * sc, W); g.strokePoints(pts, false);
+                    g.lineStyle(3, K);
+                    for (const px of [cx - r, cx + r]) {
+                        g.fillStyle(W); g.fillRect(px - 9 * sc, legTop - 6 * sc, 18 * sc, 11 * sc); g.strokeRect(px - 9 * sc, legTop - 6 * sc, 18 * sc, 11 * sc);
+                    }
+                };
+                { const g = this.make.graphics(); drawMagnet(g, 48, 48, 1); g.generateTexture('pu_magnet', 96, 96); g.destroy(); }
+                { const g = this.make.graphics(); drawMagnet(g, 30, 48, 0.78); drawMagnet(g, 80, 48, 0.78); g.generateTexture('pu_vacuum', 110, 96); g.destroy(); }
+
+                { // ghost — circle
+                    const g = this.make.graphics();
+                    g.fillStyle(W); g.lineStyle(5, K); g.fillCircle(48, 48, 40); g.strokeCircle(48, 48, 40);
+                    g.generateTexture('pu_ghost', 96, 96); g.destroy();
+                }
+
+                const drawRays = (g, cx, cy, inner, longLen, shortLen, bw) => {
+                    for (let i = 0; i < 12; i++) {
+                        const a = i * Math.PI / 6, len = (i % 2 === 0) ? longLen : shortLen;
+                        const ox = Math.cos(a), oy = Math.sin(a), bx = -oy, byv = ox;
+                        const tri = [
+                            { x: cx + ox * inner + bx * bw, y: cy + oy * inner + byv * bw },
+                            { x: cx + ox * (inner + len), y: cy + oy * (inner + len) },
+                            { x: cx + ox * inner - bx * bw, y: cy + oy * inner - byv * bw },
+                        ];
+                        g.fillStyle(W); g.lineStyle(3, K);
+                        g.fillPoints(tri, true); g.strokePoints(tri, true);
+                    }
+                };
+                { const g = this.make.graphics(); drawRays(g, 48, 48, 26, 22, 13, 4); g.fillStyle(W); g.lineStyle(4, K); g.fillCircle(48, 48, 24); g.strokeCircle(48, 48, 24); g.generateTexture('pu_sun', 96, 96); g.destroy(); }
+                { const g = this.make.graphics(); drawRays(g, 64, 64, 36, 24, 15, 5); g.generateTexture('pu_halo', 128, 128); g.destroy(); }
+            }
+
+            spawnPowerupSprite(pu) {
+                const key = pu.type === 'mult' ? 'pu_mult'
+                    : pu.type === 'vacuum' ? 'pu_vacuum'
+                        : pu.type === 'ghost' ? 'pu_ghost' : 'pu_sun';
+                const sprite = this.add.image(pu.x, pu.y, key).setDepth(4);
+                const aspect = sprite.width / sprite.height;
+                sprite.setDisplaySize(POWERUP_ICON * aspect, POWERUP_ICON);
+                this.powerupSprites.set(pu.id, sprite);
+                this.tweens.add({
+                    targets: sprite, scaleX: sprite.scaleX * 1.12, scaleY: sprite.scaleY * 1.12,
+                    duration: 700, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
+                });
+            }
+
+            // Lazily build a player's powerup effect overlays (world-space images
+            // that follow the character). Ghost is opacity, so it has no overlay.
+            ensurePlayerFx(v) {
+                if (v.fx) return;
+                v.fx = {
+                    mult: this.add.image(0, 0, 'pu_mult').setDepth(13).setVisible(false).setScale(0.5),
+                    magL: this.add.image(0, 0, 'pu_magnet').setDepth(13).setVisible(false).setScale(0.6),
+                    magR: this.add.image(0, 0, 'pu_magnet').setDepth(13).setVisible(false).setScale(0.6).setFlipX(true),
+                    halo: this.add.image(0, 0, 'pu_halo').setDepth(9).setVisible(false).setScale(1.25),
+                };
+            }
+
+            // Drive every active powerup's visuals each frame: character overlays
+            // (following each player) plus the bottom-centre HUD for the local
+            // player. Soft shared pulse conveys the temporary nature.
+            updatePowerupVisuals(time) {
+                const pulse = 1 + 0.06 * Math.sin(time / 220);
+
+                for (const [id, v] of this.playerVisuals) {
+                    this.ensurePlayerFx(v);
+                    const data = this.latestPlayerData.get(id);
+                    const pw = (data && data.powerups) || {};
+                    const alive = !data || data.alive;
+                    const shown = v.sprite.visible;
+                    const px = v.sprite.x, py = v.sprite.y;
+                    const fx = v.fx;
+
+                    if (shown) {
+                        const a = (pw.ghost && alive) ? 0.5 : 1;   // Ghost — half opacity
+                        v.sprite.setAlpha(a); v.eyesContainer.setAlpha(a);
+                    }
+                    fx.mult.setVisible(!!pw.mult && alive && shown).setPosition(px, py - 66).setScale(0.5 * pulse);
+                    const vac = !!pw.vacuum && alive && shown;
+                    fx.magL.setVisible(vac).setPosition(px - 60, py);
+                    fx.magR.setVisible(vac).setPosition(px + 60, py);
+                    fx.halo.setVisible(!!pw.secondWind && alive && shown).setPosition(px, py);
+                    if (fx.halo.visible) fx.halo.rotation += 0.012;
+                }
+
+                if (!this.powerupHud) {
+                    this.powerupHud = this.add.container(0, 0).setScrollFactor(0).setDepth(160);
+                    this.powerupHud.icons = {};
+                }
+                const me = this.latestPlayerData.get(mySessionId);
+                const myPw = (me && me.powerups) || {};
+                const active = POWERUP_TYPES.filter(t => myPw[t]);
+                const S = 66, cx = CANVAS_WIDTH / 2, y = CANVAS_HEIGHT * 0.8, n = active.length;
+                const used = new Set();
+                active.forEach((t, i) => {
+                    const key = t === 'mult' ? 'pu_mult' : t === 'vacuum' ? 'pu_vacuum' : t === 'ghost' ? 'pu_ghost' : 'pu_sun';
+                    let ic = this.powerupHud.icons[t];
+                    if (!ic) {
+                        ic = this.add.image(0, 0, key);
+                        this.powerupHud.add(ic);
+                        const aspect = ic.width / ic.height;
+                        ic.setDisplaySize(52 * aspect, 52);
+                        ic.baseScaleX = ic.scaleX; ic.baseScaleY = ic.scaleY;
+                        this.powerupHud.icons[t] = ic;
+                    }
+                    ic.setVisible(true).setPosition(cx + (i - (n - 1) / 2) * S, y);
+                    ic.setScale(ic.baseScaleX * pulse, ic.baseScaleY * pulse);
+                    ic.setAlpha(t === 'ghost' ? 0.5 : 1);
+                    used.add(t);
+                });
+                for (const t of POWERUP_TYPES) {
+                    const ic = this.powerupHud.icons[t];
+                    if (ic && !used.has(t)) ic.setVisible(false);
+                }
             }
 
             spawnSideWallSegment(seg) {
@@ -5022,6 +5173,11 @@
                 if (snap.newSideWallSegments) for (const seg of snap.newSideWallSegments) this.spawnSideWallSegment(seg);
                 if (snap.newBlocks) for (const b of snap.newBlocks) this.spawnBlockSprite(b);
                 if (snap.newCoins) for (const c of snap.newCoins) this.spawnCoinSprite(c);
+                if (snap.newPowerups) for (const pu of snap.newPowerups) this.spawnPowerupSprite(pu);
+                if (snap.movedCoins) for (const m of snap.movedCoins) {
+                    const s = this.coinSprites.get(m.id);
+                    if (s) { s.x = m.x; s.y = m.y; }
+                }
                 if (snap.newPentagons) for (const p of snap.newPentagons) this.spawnPentagonSprite(p);
                 if (snap.newHexagonPairs) for (const h of snap.newHexagonPairs) this.spawnHexagonPairSprite(h);
                 if (snap.newHeptagons) for (const h of snap.newHeptagons) this.spawnHeptagonSprite(h);
@@ -5035,6 +5191,10 @@
                 if (snap.removedCoinIds) for (const id of snap.removedCoinIds) {
                     const s = this.coinSprites.get(id);
                     if (s) { s.destroy(); this.coinSprites.delete(id); }
+                }
+                if (snap.removedPowerupIds) for (const id of snap.removedPowerupIds) {
+                    const s = this.powerupSprites.get(id);
+                    if (s) { s.destroy(); this.powerupSprites.delete(id); }
                 }
                 if (snap.removedPentagonIds) for (const id of snap.removedPentagonIds) {
                     const s = this.pentagonSprites.get(id);
@@ -5159,7 +5319,7 @@
                         continue;
                     }
 
-                    this.latestPlayerData.set(id, { x: p.x, y: p.y, alive: p.alive, displayName: p.displayName, appearance: p.appearance });
+                    this.latestPlayerData.set(id, { x: p.x, y: p.y, alive: p.alive, displayName: p.displayName, appearance: p.appearance, powerups: p.powerups || {} });
                     let v = this.playerVisuals.get(id);
                     if (!v) {
                         v = this.createPlayerVisual(id, isMe);
@@ -5333,6 +5493,14 @@
                 if (snap.events) {
                     for (const ev of snap.events) {
                         if (ev.type === 'coin_collected') this.playCoinFX(ev.x, ev.y);
+                        else if (ev.type === 'powerup_collected') {
+                            this.playCoinFX(ev.x, ev.y);
+                            this.cameras.main.flash(120, 255, 255, 255, false);
+                        }
+                        else if (ev.type === 'second_wind') {
+                            this.spawnParticles(ev.x, ev.y);
+                            if (ev.playerId === mySessionId) this.cameras.main.shake(140, 0.006);
+                        }
                         else if (ev.type === 'hit') {
                             this.spawnParticles(ev.x, ev.y);
                             if (ev.playerId === mySessionId) {
@@ -5902,6 +6070,7 @@
                 this.updateRemotePlayerVisuals();
                 this.updatePolygonExtrapolation();
                 this.updateProximityIndicators();
+                this.updatePowerupVisuals(time);
 
                 for (const refs of this.hexagonPairSprites.values()) {
                     this.drawBeamDashes(refs, time);

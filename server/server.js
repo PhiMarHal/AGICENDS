@@ -69,6 +69,20 @@ const SIM = {
     STUN_DURATION_MS: 400,
     STUN_KNOCKBACK_BOOST: 2.0,
 
+    // ── Powerups ────────────────────────────────────────────────────────
+    // One powerup spawns per interval band; a player collects it by touching
+    // it (like a coin). Effects are per-player; re-collecting refreshes the
+    // timer, and different effects stack. Durations are in ms.
+    POWERUP_SIZE: 40,                  // pickup hitbox / render size (world units)
+    POWERUP_PICK_MULT: 1.4,            // pickup-radius leniency around POWERUP_SIZE
+    POWERUP_TYPES: ['mult', 'vacuum', 'ghost', 'secondWind'],
+    POWERUP_DURATIONS: { mult: 16000, vacuum: 16000, ghost: 16000, secondWind: 64000 },
+    MULT_FACTOR: 4,                    // triangle worth 4 * MULT_FACTOR while Mult active
+    VACUUM_RADIUS: 360,                // = CANVAS_WIDTH / 2; coins within are pulled in
+    VACUUM_PULL_SPEED: 900,            // px/s coins move toward the player
+    SECOND_WIND_LAUNCH_VY: -1800,      // strong upward launch when a spike hit is saved
+    SECOND_WIND_GHOST_MS: 2500,        // brief no-collision window after the save
+
     // Countdown seen by players once they click READY (10 s lobby window).
     READY_COUNTDOWN_SECONDS: 10,
 
@@ -144,6 +158,7 @@ function makeWorld() {
     return {
         blocks: new Map(),
         coins: new Map(),
+        powerups: new Map(),
         pentagons: new Map(),
         hexagonPairs: new Map(),
         heptagons: new Map(),
@@ -156,9 +171,11 @@ function makeWorld() {
         lastWallChunkY: SIM.CANVAS_HEIGHT + 200,  // independent tracker for walls only
         highestGeneratedY: SIM.CANVAS_HEIGHT + 200,
         newBlocks: [], newCoins: [],
+        newPowerups: [], movedCoins: [],
         newPentagons: [], newHexagonPairs: [], newHeptagons: [], newOctagons: [],
         newProjectiles: [],
         removedBlockIds: [], removedCoinIds: [],
+        removedPowerupIds: [],
         removedPentagonIds: [], removedHexagonPairIds: [], removedHeptagonIds: [],
         removedOctagonIds: [], removedProjectileIds: [],
         dirtyBlockScales: new Set(),
@@ -167,9 +184,11 @@ function makeWorld() {
 
 function resetTickDeltas(world) {
     world.newBlocks = []; world.newCoins = [];
+    world.newPowerups = []; world.movedCoins = [];
     world.newPentagons = []; world.newHexagonPairs = []; world.newHeptagons = []; world.newOctagons = [];
     world.newProjectiles = [];
     world.removedBlockIds = []; world.removedCoinIds = [];
+    world.removedPowerupIds = [];
     world.removedPentagonIds = []; world.removedHexagonPairIds = []; world.removedHeptagonIds = [];
     world.removedOctagonIds = []; world.removedProjectileIds = [];
     world.dirtyBlockScales = new Set();
@@ -224,6 +243,43 @@ function spawnCoin(world, x, y) {
     world.coins.set(coin.id, coin);
     world.newCoins.push(coin);
     return coin;
+}
+
+function spawnPowerup(world, x, y, type) {
+    const pu = { id: newId('pu'), x, y, type };
+    world.powerups.set(pu.id, pu);
+    world.newPowerups.push(pu);
+    return pu;
+}
+
+// One powerup per interval band, dropped anywhere in the band above its
+// barrier row (random x within the walls, random type).
+function spawnIntervalPowerup(world, intervalY) {
+    const minX = SIM.WALL_THICKNESS + SIM.POWERUP_SIZE;
+    const maxX = SIM.CANVAS_WIDTH - SIM.WALL_THICKNESS - SIM.POWERUP_SIZE;
+    const yTop = intervalY - SIM.BASE_INTERVAL + 120;  // just below the next barrier up
+    const yBot = intervalY - 120;                      // just above this barrier
+    const type = SIM.POWERUP_TYPES[Math.floor(Math.random() * SIM.POWERUP_TYPES.length)];
+    for (let a = 0; a < 30; a++) {
+        const x = randIntBetween(minX, maxX);
+        const y = randIntBetween(yTop, yBot);
+        if (isSpaceClear(world, x, y, SIM.BLOCK_MIN_DIST)) {
+            spawnPowerup(world, x, y, type);
+            return;
+        }
+    }
+    spawnPowerup(world, randIntBetween(minX, maxX), intervalY - SIM.BASE_INTERVAL / 2, type);
+}
+
+// True if player p currently has `type` active (expiry in the future).
+function hasPower(p, type, nowMs) {
+    return !!(p.activePowerups && p.activePowerups[type] > nowMs);
+}
+
+// No-collision state: the Ghost powerup, or the brief window granted right
+// after a Second Wind save.
+function isGhosting(p, nowMs) {
+    return hasPower(p, 'ghost', nowMs) || (p.secondWindGhostUntil || 0) > nowMs;
 }
 
 function spawnPentagon(world, x, y, spawnTime) {
@@ -441,6 +497,7 @@ function generateChunks(world, targetY, elapsedMs) {
                     const intervalNumber = i + 1;
                     spawnFullRowOfBlocks(world, intervalY);
                     spawnIntervalCoinColumns(world, intervalY - SIM.OBSTACLE_SIZE, intervalNumber);
+                    spawnIntervalPowerup(world, intervalY);
                 }
             }
         }
@@ -507,6 +564,8 @@ function makePlayer(id) {
         nextFlapDirection: 1,
         lastStunTime: -Infinity,
         inRound: false,   // true only for players who clicked READY before countdown ended
+        activePowerups: { mult: 0, vacuum: 0, ghost: 0, secondWind: 0 },  // expiry (elapsedMs)
+        secondWindGhostUntil: 0,  // brief no-collision window after a Second Wind save
     };
 }
 
@@ -528,6 +587,8 @@ function resetPlayer(p) {
     // round start; used as a tertiary tiebreaker when two
     // Devils players die at the same elapsedMs with the same
     // score. Earlier joiner (lower index) wins.
+    p.activePowerups = { mult: 0, vacuum: 0, ghost: 0, secondWind: 0 };
+    p.secondWindGhostUntil = 0;
 }
 
 function makeMatch() {
@@ -891,99 +952,149 @@ function step(match, deltaSeconds) {
         p.y = newY;
         clampVelocity(p);
 
+        // Vacuum — pull nearby coins toward the player (streamed via movedCoins
+        // so other clients see them move too). Runs before pickup so a pulled
+        // coin can be collected the same tick it reaches the player.
+        if (hasPower(p, 'vacuum', match.elapsedMs)) {
+            const vr2 = SIM.VACUUM_RADIUS * SIM.VACUUM_RADIUS;
+            const vstep = SIM.VACUUM_PULL_SPEED * deltaSeconds;
+            for (const coin of w.coins.values()) {
+                const dx = p.x - coin.x, dy = p.y - coin.y;
+                const d2 = dx * dx + dy * dy;
+                if (d2 < vr2 && d2 > 1) {
+                    const d = Math.sqrt(d2);
+                    const move = Math.min(vstep, d);
+                    coin.x += (dx / d) * move;
+                    coin.y += (dy / d) * move;
+                    w.movedCoins.push({ id: coin.id, x: coin.x, y: coin.y });
+                }
+            }
+        }
+
         const coinPickRadiusSq = ((SIM.PLAYER_RADIUS + SIM.OBSTACLE_SIZE * SIM.COIN_HITBOX_MULTIPLIER * 0.5) ** 2);
         for (const coin of w.coins.values()) {
             const dx = p.x - coin.x, dy = p.y - coin.y;
             if (dx * dx + dy * dy < coinPickRadiusSq) {
                 w.coins.delete(coin.id);
                 w.removedCoinIds.push(coin.id);
-                awardScore(match, p, 4);
+                // Mult: each triangle is worth 4 * MULT_FACTOR while active.
+                awardScore(match, p, hasPower(p, 'mult', match.elapsedMs) ? 4 * SIM.MULT_FACTOR : 4);
                 match.eventsThisTick.push({ type: 'coin_collected', x: coin.x, y: coin.y, by: p.id });
             }
         }
 
-        for (const block of w.blocks.values()) {
-            if (resolveBlockBounce(p, block, block.scale, match.eventsThisTick, w)) {
-                block.hits++;
-                if (block.hits >= 5) {
-                    w.blocks.delete(block.id);
-                    w.removedBlockIds.push(block.id);
-                } else {
-                    block.scale = 1.0 - (block.hits * 0.2);
-                    w.dirtyBlockScales.add(block.id);
-                }
+        // Powerup pickup — touch to collect; activates / refreshes the effect.
+        const puPickRadiusSq = (SIM.PLAYER_RADIUS + SIM.POWERUP_SIZE * SIM.POWERUP_PICK_MULT * 0.5) ** 2;
+        for (const pu of w.powerups.values()) {
+            const dx = p.x - pu.x, dy = p.y - pu.y;
+            if (dx * dx + dy * dy < puPickRadiusSq) {
+                w.powerups.delete(pu.id);
+                w.removedPowerupIds.push(pu.id);
+                p.activePowerups[pu.type] = match.elapsedMs + (SIM.POWERUP_DURATIONS[pu.type] || 16000);
+                match.eventsThisTick.push({ type: 'powerup_collected', x: pu.x, y: pu.y, by: p.id, power: pu.type });
             }
         }
 
-        for (const pent of w.pentagons.values()) {
-            resolveCircleBounce(p, pent.x, pent.y, SIM.PENTAGON.size / 2, match.eventsThisTick);
-        }
-
-        for (const pair of w.hexagonPairs.values()) {
-            resolveCircleBounce(p, pair.leftX, pair.y, SIM.HEXAGON.size / 2, match.eventsThisTick);
-            resolveCircleBounce(p, pair.rightX, pair.y, SIM.HEXAGON.size / 2, match.eventsThisTick);
-        }
-
-        for (const pair of w.hexagonPairs.values()) {
-            if (!pair.beamActive) continue;
-            const halfBeam = pair.beamHeight / 2;
-            const beamLeft = pair.leftX + SIM.HEXAGON.size / 2;
-            const beamRight = pair.rightX - SIM.HEXAGON.size / 2;
-            const beamTop = pair.y - halfBeam;
-            const beamBottom = pair.y + halfBeam;
-            const cx = Math.max(beamLeft, Math.min(p.x, beamRight));
-            const cy = Math.max(beamTop, Math.min(p.y, beamBottom));
-            const dx = p.x - cx, dy = p.y - cy;
-            const distSq = dx * dx + dy * dy;
-            const r = SIM.PLAYER_RADIUS;
-            if (distSq < r * r && distSq > 0.0001) {
-                const dist = Math.sqrt(distSq);
-                const nx = dx / dist, ny = dy / dist;
-                const overlap = r - dist;
-                p.x += nx * overlap;
-                p.y += ny * overlap;
-                const vDotN = p.vx * nx + p.vy * ny;
-                if (vDotN < 0) {
-                    p.vx -= (1 + SIM.PLAYER_BOUNCE) * vDotN * nx;
-                    p.vy -= (1 + SIM.PLAYER_BOUNCE) * vDotN * ny;
-                    p.vx *= SIM.STUN_KNOCKBACK_BOOST;
-                    p.vy *= SIM.STUN_KNOCKBACK_BOOST;
-                    clampVelocity(p);
-                    p.lastStunTime = match.elapsedMs;
-                }
-                match.eventsThisTick.push({ type: 'hit', x: p.x, y: p.y, playerId: p.id });
-            }
-        }
-
-        for (const h of w.heptagons.values()) {
-            resolveCircleBounce(p, h.x, h.y, SIM.HEPTAGON.size / 2, match.eventsThisTick, true, match);
-        }
-
-        for (const o of w.octagons.values()) {
-            resolveCircleBounce(p, o.x, o.y, SIM.OCTAGON.size / 2, match.eventsThisTick);
-        }
-
-        for (const proj of w.projectiles.values()) {
-            const fakeBlock = { x: proj.x, y: proj.y };
-            if (resolveBlockBounce(p, fakeBlock, proj.scale, match.eventsThisTick, w)) {
-                proj.hits++;
-                if (proj.hits >= 5) {
-                    w.projectiles.delete(proj.id);
-                    w.removedProjectileIds.push(proj.id);
-                } else {
-                    proj.scale = 1.0 - (proj.hits * 0.2);
+        // Ghost (and the brief window after a Second Wind save) passes through
+        // every obstacle below. Boundary walls, coin/powerup pickup and the
+        // spike wall are handled outside this block and still apply.
+        if (!isGhosting(p, match.elapsedMs)) {
+            for (const block of w.blocks.values()) {
+                if (resolveBlockBounce(p, block, block.scale, match.eventsThisTick, w)) {
+                    block.hits++;
+                    if (block.hits >= 5) {
+                        w.blocks.delete(block.id);
+                        w.removedBlockIds.push(block.id);
+                    } else {
+                        block.scale = 1.0 - (block.hits * 0.2);
+                        w.dirtyBlockScales.add(block.id);
+                    }
                 }
             }
-        }
+
+            for (const pent of w.pentagons.values()) {
+                resolveCircleBounce(p, pent.x, pent.y, SIM.PENTAGON.size / 2, match.eventsThisTick);
+            }
+
+            for (const pair of w.hexagonPairs.values()) {
+                resolveCircleBounce(p, pair.leftX, pair.y, SIM.HEXAGON.size / 2, match.eventsThisTick);
+                resolveCircleBounce(p, pair.rightX, pair.y, SIM.HEXAGON.size / 2, match.eventsThisTick);
+            }
+
+            for (const pair of w.hexagonPairs.values()) {
+                if (!pair.beamActive) continue;
+                const halfBeam = pair.beamHeight / 2;
+                const beamLeft = pair.leftX + SIM.HEXAGON.size / 2;
+                const beamRight = pair.rightX - SIM.HEXAGON.size / 2;
+                const beamTop = pair.y - halfBeam;
+                const beamBottom = pair.y + halfBeam;
+                const cx = Math.max(beamLeft, Math.min(p.x, beamRight));
+                const cy = Math.max(beamTop, Math.min(p.y, beamBottom));
+                const dx = p.x - cx, dy = p.y - cy;
+                const distSq = dx * dx + dy * dy;
+                const r = SIM.PLAYER_RADIUS;
+                if (distSq < r * r && distSq > 0.0001) {
+                    const dist = Math.sqrt(distSq);
+                    const nx = dx / dist, ny = dy / dist;
+                    const overlap = r - dist;
+                    p.x += nx * overlap;
+                    p.y += ny * overlap;
+                    const vDotN = p.vx * nx + p.vy * ny;
+                    if (vDotN < 0) {
+                        p.vx -= (1 + SIM.PLAYER_BOUNCE) * vDotN * nx;
+                        p.vy -= (1 + SIM.PLAYER_BOUNCE) * vDotN * ny;
+                        p.vx *= SIM.STUN_KNOCKBACK_BOOST;
+                        p.vy *= SIM.STUN_KNOCKBACK_BOOST;
+                        clampVelocity(p);
+                        p.lastStunTime = match.elapsedMs;
+                    }
+                    match.eventsThisTick.push({ type: 'hit', x: p.x, y: p.y, playerId: p.id });
+                }
+            }
+
+            for (const h of w.heptagons.values()) {
+                resolveCircleBounce(p, h.x, h.y, SIM.HEPTAGON.size / 2, match.eventsThisTick, true, match);
+            }
+
+            for (const o of w.octagons.values()) {
+                resolveCircleBounce(p, o.x, o.y, SIM.OCTAGON.size / 2, match.eventsThisTick);
+            }
+
+            for (const proj of w.projectiles.values()) {
+                const fakeBlock = { x: proj.x, y: proj.y };
+                if (resolveBlockBounce(p, fakeBlock, proj.scale, match.eventsThisTick, w)) {
+                    proj.hits++;
+                    if (proj.hits >= 5) {
+                        w.projectiles.delete(proj.id);
+                        w.removedProjectileIds.push(proj.id);
+                    } else {
+                        proj.scale = 1.0 - (proj.hits * 0.2);
+                    }
+                }
+            }
+        }  // end if(!isGhosting): obstacle collisions skipped while Ghosting / Second-Wind window
 
         if (p.y > match.spikeY) {
-            p.alive = false;
-            p.deathTime = match.elapsedMs;
-            match.eventsThisTick.push({ type: 'death', playerId: p.id });
+            if (hasPower(p, 'secondWind', match.elapsedMs)) {
+                // Consume Second Wind: launch clear instead of dying, with a
+                // brief no-collision window (like Ghost) to escape the spike.
+                p.activePowerups.secondWind = 0;
+                p.vy = SIM.SECOND_WIND_LAUNCH_VY;
+                p.y = match.spikeY - SIM.PLAYER_RADIUS - 1;  // nudge above the spike line
+                p.secondWindGhostUntil = match.elapsedMs + SIM.SECOND_WIND_GHOST_MS;
+                match.eventsThisTick.push({ type: 'second_wind', x: p.x, y: p.y, playerId: p.id });
+            } else {
+                p.alive = false;
+                p.deathTime = match.elapsedMs;
+                match.eventsThisTick.push({ type: 'death', playerId: p.id });
+            }
         }
     }
 
     const cleanupY = match.spikeY + 600;
+    for (const pu of w.powerups.values()) {
+        if (pu.y > cleanupY) { w.powerups.delete(pu.id); w.removedPowerupIds.push(pu.id); }
+    }
     for (const pent of w.pentagons.values()) {
         if (pent.y > cleanupY) { w.pentagons.delete(pent.id); w.removedPentagonIds.push(pent.id); }
     }
@@ -1074,6 +1185,7 @@ function buildWorldInit(world) {
         type: 'world_init',
         blocks: Array.from(world.blocks.values()),
         coins: Array.from(world.coins.values()),
+        powerups: Array.from(world.powerups.values()),
         pentagons: Array.from(world.pentagons.values()),
         hexagonPairs: Array.from(world.hexagonPairs.values()),
         heptagons: Array.from(world.heptagons.values()),
@@ -1106,6 +1218,11 @@ function buildSnapshot(match) {
     }
 
     for (const p of match.players.values()) {
+        const pu = {};
+        for (const t of SIM.POWERUP_TYPES) {
+            const rem = (p.activePowerups[t] || 0) - match.elapsedMs;
+            if (rem > 0) pu[t] = rem / 1000;  // remaining seconds for the client
+        }
         const entry = {
             displayName: p.displayName,   // null for anon; client falls back to p.id
             appearance: p.appearance,     // null = default look; client renders accordingly
@@ -1115,6 +1232,7 @@ function buildSnapshot(match) {
             stunned: (match.elapsedMs - p.lastStunTime) < SIM.STUN_DURATION_MS,
             inRound: p.inRound,
             pendingInRound: !p.inRound && match.readyPlayers.has(p.id),
+            powerups: pu,   // { type: remainingSeconds } for each active effect
         };
         const qp = queueByPlayer.get(p.id);
         if (qp != null) entry.queuePosition = qp;
@@ -1212,6 +1330,8 @@ function buildSnapshot(match) {
         players,
         newBlocks: match.world.newBlocks,
         newCoins: match.world.newCoins,
+        newPowerups: match.world.newPowerups,
+        movedCoins: match.world.movedCoins,
         newPentagons: match.world.newPentagons,
         newHexagonPairs: match.world.newHexagonPairs,
         newHeptagons: match.world.newHeptagons,
@@ -1219,6 +1339,7 @@ function buildSnapshot(match) {
         newProjectiles: match.world.newProjectiles,
         removedBlockIds: match.world.removedBlockIds,
         removedCoinIds: match.world.removedCoinIds,
+        removedPowerupIds: match.world.removedPowerupIds,
         removedPentagonIds: match.world.removedPentagonIds,
         removedHexagonPairIds: match.world.removedHexagonPairIds,
         removedHeptagonIds: match.world.removedHeptagonIds,
