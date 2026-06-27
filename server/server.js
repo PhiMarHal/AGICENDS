@@ -254,21 +254,24 @@ function spawnPowerup(world, x, y, type) {
 
 // One powerup per interval band, dropped anywhere in the band above its
 // barrier row (random x within the walls, random type).
-function spawnIntervalPowerup(world, intervalY) {
+function spawnPowerupInBand(world, yLo, yHi) {
     const minX = SIM.WALL_THICKNESS + SIM.POWERUP_SIZE;
     const maxX = SIM.CANVAS_WIDTH - SIM.WALL_THICKNESS - SIM.POWERUP_SIZE;
-    const yTop = intervalY - SIM.BASE_INTERVAL + 120;  // just below the next barrier up
-    const yBot = intervalY - 120;                      // just above this barrier
     const type = SIM.POWERUP_TYPES[Math.floor(Math.random() * SIM.POWERUP_TYPES.length)];
     for (let a = 0; a < 30; a++) {
         const x = randIntBetween(minX, maxX);
-        const y = randIntBetween(yTop, yBot);
+        const y = randIntBetween(yLo, yHi);
         if (isSpaceClear(world, x, y, SIM.BLOCK_MIN_DIST)) {
             spawnPowerup(world, x, y, type);
             return;
         }
     }
-    spawnPowerup(world, randIntBetween(minX, maxX), intervalY - SIM.BASE_INTERVAL / 2, type);
+    spawnPowerup(world, randIntBetween(minX, maxX), Math.floor((yLo + yHi) / 2), type);
+}
+
+// Normal per-interval spawn: somewhere in the band above the new barrier.
+function spawnIntervalPowerup(world, intervalY) {
+    spawnPowerupInBand(world, intervalY - SIM.BASE_INTERVAL + 120, intervalY - 120);
 }
 
 // True if player p currently has `type` active (expiry in the future).
@@ -990,7 +993,11 @@ function step(match, deltaSeconds) {
             if (dx * dx + dy * dy < puPickRadiusSq) {
                 w.powerups.delete(pu.id);
                 w.removedPowerupIds.push(pu.id);
-                p.activePowerups[pu.type] = match.elapsedMs + (SIM.POWERUP_DURATIONS[pu.type] || 16000);
+                // Second Wind is permanent until consumed by a spike hit; the
+                // others run on a timer.
+                p.activePowerups[pu.type] = pu.type === 'secondWind'
+                    ? Infinity
+                    : match.elapsedMs + (SIM.POWERUP_DURATIONS[pu.type] || 16000);
                 match.eventsThisTick.push({ type: 'powerup_collected', x: pu.x, y: pu.y, by: p.id, power: pu.type });
             }
         }
@@ -1125,6 +1132,24 @@ function step(match, deltaSeconds) {
         }
         match.eventsThisTick.push({ type: 'interval_reached', n: intervalNumber });
 
+        // ── Catch-up powerup ────────────────────────────────────────────
+        // When the leader breaches a new wall, drop a bonus powerup somewhere
+        // in the interval just completed. Players close behind have little of
+        // that band left to sweep; players far back traverse all of it and are
+        // likely to find it — a self-scaling rubber-band. Gated to 2+ in-round
+        // players (a solo run has no one to catch up to).
+        {
+            let inRoundCount = 0;
+            for (const q of match.players.values()) if (q.inRound) inRoundCount++;
+            if (inRoundCount >= 2) {
+                const refStartY = SIM.CANVAS_HEIGHT - SIM.START_Y_OFFSET;
+                const crossedWallY = refStartY - match.world.intervalAltitudes[intervalNumber - 1];
+                const prevAlt = intervalNumber >= 2 ? match.world.intervalAltitudes[intervalNumber - 2] : 0;
+                const prevWallY = refStartY - prevAlt;
+                spawnPowerupInBand(match.world, crossedWallY + 100, prevWallY - 100);
+            }
+        }
+
         // ── Angels rolling resurrection ─────────────────────────────────
         // First-time crossing of any interval brings back the player who
         // died earliest. The newly-alive player materializes right on the
@@ -1220,8 +1245,9 @@ function buildSnapshot(match) {
     for (const p of match.players.values()) {
         const pu = {};
         for (const t of SIM.POWERUP_TYPES) {
-            const rem = (p.activePowerups[t] || 0) - match.elapsedMs;
-            if (rem > 0) pu[t] = rem / 1000;  // remaining seconds for the client
+            const exp = p.activePowerups[t] || 0;
+            if (exp === Infinity) pu[t] = true;                  // permanent (Second Wind)
+            else { const rem = exp - match.elapsedMs; if (rem > 0) pu[t] = rem / 1000; }
         }
         const entry = {
             displayName: p.displayName,   // null for anon; client falls back to p.id
@@ -1233,6 +1259,7 @@ function buildSnapshot(match) {
             inRound: p.inRound,
             pendingInRound: !p.inRound && match.readyPlayers.has(p.id),
             powerups: pu,   // { type: remainingSeconds } for each active effect
+            phasing: isGhosting(p, match.elapsedMs),  // true while ignoring collisions (Ghost or post-Second-Wind window)
         };
         const qp = queueByPlayer.get(p.id);
         if (qp != null) entry.queuePosition = qp;

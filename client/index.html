@@ -4509,9 +4509,10 @@
             }
 
             // Generate the powerup icon textures once (white fill, dark outline).
-            // pu_mult (rhombus), pu_magnet (single horseshoe), pu_vacuum (double,
-            // for world/HUD), pu_ghost (circle), pu_sun (rays+centre, world/HUD),
-            // pu_halo (rays only, transparent centre, for the character).
+            // pu_mult (rhombus), pu_magnet (single horseshoe, used for Vacuum in
+            // world/HUD and either side of the character), pu_ghost (circle with
+            // eyes), pu_sun (blunt rays + centre, world/HUD). The Second Wind
+            // character halo is drawn live in drawHalo(), not baked here.
             createPowerupTextures() {
                 const W = 0xffffff, K = 0x000000;
 
@@ -4528,7 +4529,7 @@
                 }
 
                 const drawMagnet = (g, cx, cy, sc) => {   // horseshoe opening up
-                    const r = 20 * sc, by = cy + 8 * sc, legTop = cy - 30 * sc, steps = 18;
+                    const r = 20 * sc, by = cy + 8 * sc, legTop = cy - 22 * sc, steps = 18;
                     const pts = [{ x: cx - r, y: legTop }];
                     for (let i = 0; i <= steps; i++) { const a = Math.PI * (1 - i / steps); pts.push({ x: cx + r * Math.cos(a), y: by + r * Math.sin(a) }); }
                     pts.push({ x: cx + r, y: legTop });
@@ -4540,34 +4541,35 @@
                     }
                 };
                 { const g = this.make.graphics(); drawMagnet(g, 48, 48, 1); g.generateTexture('pu_magnet', 96, 96); g.destroy(); }
-                { const g = this.make.graphics(); drawMagnet(g, 30, 48, 0.78); drawMagnet(g, 80, 48, 0.78); g.generateTexture('pu_vacuum', 110, 96); g.destroy(); }
 
-                { // ghost — circle
+                { // ghost — circle with two black eyes (shimmer applied at runtime)
                     const g = this.make.graphics();
                     g.fillStyle(W); g.lineStyle(5, K); g.fillCircle(48, 48, 40); g.strokeCircle(48, 48, 40);
+                    g.fillStyle(K);
+                    g.fillEllipse(36, 44, 12, 20); g.fillEllipse(60, 44, 12, 20);
                     g.generateTexture('pu_ghost', 96, 96); g.destroy();
                 }
 
-                const drawRays = (g, cx, cy, inner, longLen, shortLen, bw) => {
+                const drawRays = (g, cx, cy, inner, longLen, shortLen, wIn, wOut) => {
                     for (let i = 0; i < 12; i++) {
                         const a = i * Math.PI / 6, len = (i % 2 === 0) ? longLen : shortLen;
                         const ox = Math.cos(a), oy = Math.sin(a), bx = -oy, byv = ox;
-                        const tri = [
-                            { x: cx + ox * inner + bx * bw, y: cy + oy * inner + byv * bw },
-                            { x: cx + ox * (inner + len), y: cy + oy * (inner + len) },
-                            { x: cx + ox * inner - bx * bw, y: cy + oy * inner - byv * bw },
+                        const quad = [
+                            { x: cx + ox * inner + bx * wIn, y: cy + oy * inner + byv * wIn },
+                            { x: cx + ox * (inner + len) + bx * wOut, y: cy + oy * (inner + len) + byv * wOut },
+                            { x: cx + ox * (inner + len) - bx * wOut, y: cy + oy * (inner + len) - byv * wOut },
+                            { x: cx + ox * inner - bx * wIn, y: cy + oy * inner - byv * wIn },
                         ];
                         g.fillStyle(W); g.lineStyle(3, K);
-                        g.fillPoints(tri, true); g.strokePoints(tri, true);
+                        g.fillPoints(quad, true); g.strokePoints(quad, true);
                     }
                 };
-                { const g = this.make.graphics(); drawRays(g, 48, 48, 26, 22, 13, 4); g.fillStyle(W); g.lineStyle(4, K); g.fillCircle(48, 48, 24); g.strokeCircle(48, 48, 24); g.generateTexture('pu_sun', 96, 96); g.destroy(); }
-                { const g = this.make.graphics(); drawRays(g, 64, 64, 36, 24, 15, 5); g.generateTexture('pu_halo', 128, 128); g.destroy(); }
+                { const g = this.make.graphics(); drawRays(g, 48, 48, 26, 18, 11, 7, 4); g.fillStyle(W); g.lineStyle(4, K); g.fillCircle(48, 48, 24); g.strokeCircle(48, 48, 24); g.generateTexture('pu_sun', 96, 96); g.destroy(); }
             }
 
             spawnPowerupSprite(pu) {
                 const key = pu.type === 'mult' ? 'pu_mult'
-                    : pu.type === 'vacuum' ? 'pu_vacuum'
+                    : pu.type === 'vacuum' ? 'pu_magnet'
                         : pu.type === 'ghost' ? 'pu_ghost' : 'pu_sun';
                 const sprite = this.add.image(pu.x, pu.y, key).setDepth(4);
                 const aspect = sprite.width / sprite.height;
@@ -4577,6 +4579,9 @@
                     targets: sprite, scaleX: sprite.scaleX * 1.12, scaleY: sprite.scaleY * 1.12,
                     duration: 700, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
                 });
+                if (pu.type === 'ghost') {   // shimmer to suggest a ghost
+                    this.tweens.add({ targets: sprite, alpha: 0.45, duration: 600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+                }
             }
 
             // Lazily build a player's powerup effect overlays (world-space images
@@ -4584,11 +4589,32 @@
             ensurePlayerFx(v) {
                 if (v.fx) return;
                 v.fx = {
-                    mult: this.add.image(0, 0, 'pu_mult').setDepth(13).setVisible(false).setScale(0.5),
-                    magL: this.add.image(0, 0, 'pu_magnet').setDepth(13).setVisible(false).setScale(0.6),
-                    magR: this.add.image(0, 0, 'pu_magnet').setDepth(13).setVisible(false).setScale(0.6).setFlipX(true),
-                    halo: this.add.image(0, 0, 'pu_halo').setDepth(9).setVisible(false).setScale(1.25),
+                    mult: this.add.image(0, 0, 'pu_mult').setDepth(8).setVisible(false).setScale(1.6),
+                    magL: this.add.image(0, 0, 'pu_magnet').setDepth(13).setVisible(false).setScale(0.55),
+                    magR: this.add.image(0, 0, 'pu_magnet').setDepth(13).setVisible(false).setScale(0.55).setFlipX(true),
+                    halo: this.add.graphics().setDepth(9).setVisible(false),   // breathing sun, redrawn per frame
                 };
+            }
+
+            // Draw the Second Wind sun halo into graphics g, centred on its own
+            // origin. Blunt trapezoid rays that breathe — adjacent rays alternate
+            // growing/shrinking — and no rotation.
+            drawHalo(g, time) {
+                const inner = 42, W = 0xffffff, K = 0x000000, t = time / 350;
+                for (let i = 0; i < 12; i++) {
+                    const a = i * Math.PI / 6;
+                    const grow = Math.sin(t + (i % 2) * Math.PI);
+                    const len = 16 + 7 * grow;
+                    const ox = Math.cos(a), oy = Math.sin(a), bx = -oy, byv = ox, wIn = 7, wOut = 4;
+                    const quad = [
+                        { x: ox * inner + bx * wIn, y: oy * inner + byv * wIn },
+                        { x: ox * (inner + len) + bx * wOut, y: oy * (inner + len) + byv * wOut },
+                        { x: ox * (inner + len) - bx * wOut, y: oy * (inner + len) - byv * wOut },
+                        { x: ox * inner - bx * wIn, y: oy * inner - byv * wIn },
+                    ];
+                    g.fillStyle(W); g.lineStyle(3, K);
+                    g.fillPoints(quad, true); g.strokePoints(quad, true);
+                }
             }
 
             // Drive every active powerup's visuals each frame: character overlays
@@ -4607,15 +4633,20 @@
                     const fx = v.fx;
 
                     if (shown) {
-                        const a = (pw.ghost && alive) ? 0.5 : 1;   // Ghost — half opacity
+                        // Half opacity while phasing (Ghost, or the post-Second-Wind window).
+                        const a = (data && data.phasing) ? 0.5 : 1;
                         v.sprite.setAlpha(a); v.eyesContainer.setAlpha(a);
                     }
-                    fx.mult.setVisible(!!pw.mult && alive && shown).setPosition(px, py - 66).setScale(0.5 * pulse);
+                    // Mult — large rhombus behind the body.
+                    fx.mult.setVisible(!!pw.mult && alive && shown).setPosition(px, py).setScale(1.6 * pulse);
+                    // Vacuum — a magnet either side.
                     const vac = !!pw.vacuum && alive && shown;
-                    fx.magL.setVisible(vac).setPosition(px - 60, py);
-                    fx.magR.setVisible(vac).setPosition(px + 60, py);
-                    fx.halo.setVisible(!!pw.secondWind && alive && shown).setPosition(px, py);
-                    if (fx.halo.visible) fx.halo.rotation += 0.012;
+                    fx.magL.setVisible(vac).setPosition(px - 52, py);
+                    fx.magR.setVisible(vac).setPosition(px + 52, py);
+                    // Second Wind — non-rotating sun halo that breathes.
+                    const sw = !!pw.secondWind && alive && shown;
+                    fx.halo.setVisible(sw);
+                    if (sw) { fx.halo.clear(); this.drawHalo(fx.halo, time); fx.halo.setPosition(px, py); }
                 }
 
                 if (!this.powerupHud) {
@@ -4628,7 +4659,7 @@
                 const S = 66, cx = CANVAS_WIDTH / 2, y = CANVAS_HEIGHT * 0.8, n = active.length;
                 const used = new Set();
                 active.forEach((t, i) => {
-                    const key = t === 'mult' ? 'pu_mult' : t === 'vacuum' ? 'pu_vacuum' : t === 'ghost' ? 'pu_ghost' : 'pu_sun';
+                    const key = t === 'mult' ? 'pu_mult' : t === 'vacuum' ? 'pu_magnet' : t === 'ghost' ? 'pu_ghost' : 'pu_sun';
                     let ic = this.powerupHud.icons[t];
                     if (!ic) {
                         ic = this.add.image(0, 0, key);
@@ -4640,7 +4671,7 @@
                     }
                     ic.setVisible(true).setPosition(cx + (i - (n - 1) / 2) * S, y);
                     ic.setScale(ic.baseScaleX * pulse, ic.baseScaleY * pulse);
-                    ic.setAlpha(t === 'ghost' ? 0.5 : 1);
+                    ic.setAlpha(t === 'ghost' ? (0.5 + 0.2 * Math.sin(time / 260)) : 1);   // ghost shimmers
                     used.add(t);
                 });
                 for (const t of POWERUP_TYPES) {
@@ -5319,7 +5350,7 @@
                         continue;
                     }
 
-                    this.latestPlayerData.set(id, { x: p.x, y: p.y, alive: p.alive, displayName: p.displayName, appearance: p.appearance, powerups: p.powerups || {} });
+                    this.latestPlayerData.set(id, { x: p.x, y: p.y, alive: p.alive, displayName: p.displayName, appearance: p.appearance, powerups: p.powerups || {}, phasing: p.phasing });
                     let v = this.playerVisuals.get(id);
                     if (!v) {
                         v = this.createPlayerVisual(id, isMe);
