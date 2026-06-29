@@ -498,7 +498,7 @@
       --line: #222; --line-hi: #383838; --stage-bg: #ffffff; --accent: #fff;
       position: fixed; inset: 0; z-index: 2147483600;
       display: flex; align-items: flex-start; justify-content: center;
-      background: rgba(6,6,6,0.82);
+      background: #060606;
       font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       color: var(--fg); -webkit-tap-highlight-color: transparent;
       overscroll-behavior: contain;
@@ -554,8 +554,8 @@
     <style>${CREATOR_CSS}</style>
     <div class="cc-scroll">
       <div class="cc-head">
-        <h1>CHARACTER · LAB</h1>
-        <div class="sub">agiscends / morphology bench</div>
+        <h1>BOLO LAB</h1>
+        <div class="sub">&nbsp;</div>
       </div>
       <div class="cc-stage-wrap">
         <span class="cc-bracket tl"></span><span class="cc-bracket tr"></span>
@@ -567,7 +567,7 @@
           </svg>
         </div>
       </div>
-      <div class="cc-helper">TAP TO JUMP · MOVE CURSOR TO LOOK</div>
+      <div class="cc-helper">&nbsp;</div>
       <div class="cc-controls"></div>
       <div class="cc-actions">
         <button class="cc-save primary">SAVE</button>
@@ -651,7 +651,8 @@
         };
         squeezeAnim.totalDur = squeezeAnim.phases.reduce((a, p) => a + p.dur, 0);
         function triggerSqueeze() {
-            if (squeezeAnim.active) return;
+            // Restart on every click — interrupt any in-progress jump so the
+            // player can spam with no downtime.
             squeezeAnim.active = true;
             squeezeAnim.startTime = performance.now();
             squeezeAnim.slant = (Math.random() - 0.5) * 22;
