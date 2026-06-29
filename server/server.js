@@ -81,7 +81,7 @@ const SIM = {
     VACUUM_RADIUS: 360,                // = CANVAS_WIDTH / 2; coins within are pulled in
     VACUUM_PULL_SPEED: 900,            // px/s coins move toward the player
     SECOND_WIND_LAUNCH_VY: -1800,      // strong upward launch when a spike hit is saved
-    SECOND_WIND_GHOST_MS: 2500,        // brief no-collision window after the save
+    SECOND_WIND_GHOST_MS: 2000,        // no-collision window after the save (also the spent-icon linger)
 
     // Countdown seen by players once they click READY (10 s lobby window).
     READY_COUNTDOWN_SECONDS: 10,
@@ -1089,6 +1089,10 @@ function step(match, deltaSeconds) {
                 p.vy = SIM.SECOND_WIND_LAUNCH_VY;
                 p.y = match.spikeY - SIM.PLAYER_RADIUS - 1;  // nudge above the spike line
                 p.secondWindGhostUntil = match.elapsedMs + SIM.SECOND_WIND_GHOST_MS;
+                // Ignore player input briefly (exactly like hexagon rays /
+                // heptagon hits) so flaps can't bleed off the launch — the
+                // player is guaranteed the full upward boost.
+                p.lastStunTime = match.elapsedMs;
                 match.eventsThisTick.push({ type: 'second_wind', x: p.x, y: p.y, playerId: p.id });
             } else {
                 p.alive = false;
@@ -1136,18 +1140,15 @@ function step(match, deltaSeconds) {
         // When the leader breaches a new wall, drop a bonus powerup somewhere
         // in the interval just completed. Players close behind have little of
         // that band left to sweep; players far back traverse all of it and are
-        // likely to find it — a self-scaling rubber-band. Gated to 2+ in-round
-        // players (a solo run has no one to catch up to).
+        // likely to find it — a self-scaling rubber-band. Always fires, even
+        // solo: the bonus invites a risky dive back down past the rising spikes,
+        // or tempts the leader to break off the climb to grab it.
         {
-            let inRoundCount = 0;
-            for (const q of match.players.values()) if (q.inRound) inRoundCount++;
-            if (inRoundCount >= 2) {
-                const refStartY = SIM.CANVAS_HEIGHT - SIM.START_Y_OFFSET;
-                const crossedWallY = refStartY - match.world.intervalAltitudes[intervalNumber - 1];
-                const prevAlt = intervalNumber >= 2 ? match.world.intervalAltitudes[intervalNumber - 2] : 0;
-                const prevWallY = refStartY - prevAlt;
-                spawnPowerupInBand(match.world, crossedWallY + 100, prevWallY - 100);
-            }
+            const refStartY = SIM.CANVAS_HEIGHT - SIM.START_Y_OFFSET;
+            const crossedWallY = refStartY - match.world.intervalAltitudes[intervalNumber - 1];
+            const prevAlt = intervalNumber >= 2 ? match.world.intervalAltitudes[intervalNumber - 2] : 0;
+            const prevWallY = refStartY - prevAlt;
+            spawnPowerupInBand(match.world, crossedWallY + 100, prevWallY - 100);
         }
 
         // ── Angels rolling resurrection ─────────────────────────────────
@@ -1245,8 +1246,16 @@ function buildSnapshot(match) {
     for (const p of match.players.values()) {
         const pu = {};
         for (const t of SIM.POWERUP_TYPES) {
+            if (t === 'secondWind') {
+                // Held: a permanent flag. Just spent: linger as a countdown over
+                // the no-collision window so the HUD icon pulses out (8x, like the
+                // other icons' final seconds). hasPower stays false once spent.
+                if (p.activePowerups.secondWind === Infinity) pu.secondWind = true;
+                else if (p.secondWindGhostUntil > match.elapsedMs) pu.secondWind = (p.secondWindGhostUntil - match.elapsedMs) / 1000;
+                continue;
+            }
             const exp = p.activePowerups[t] || 0;
-            if (exp === Infinity) pu[t] = true;                  // permanent (Second Wind)
+            if (exp === Infinity) pu[t] = true;                  // permanent
             else { const rem = exp - match.elapsedMs; if (rem > 0) pu[t] = rem / 1000; }
         }
         const entry = {

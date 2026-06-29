@@ -4546,7 +4546,7 @@
                     const g = this.make.graphics();
                     g.fillStyle(W); g.lineStyle(5, K); g.fillCircle(48, 48, 40); g.strokeCircle(48, 48, 40);
                     g.fillStyle(K);
-                    g.fillEllipse(36, 44, 12, 20); g.fillEllipse(60, 44, 12, 20);
+                    g.fillEllipse(36, 44, 9, 26); g.fillEllipse(60, 44, 9, 26);
                     g.generateTexture('pu_ghost', 96, 96); g.destroy();
                 }
 
@@ -4565,6 +4565,22 @@
                     }
                 };
                 { const g = this.make.graphics(); drawRays(g, 48, 48, 26, 18, 11, 7, 4); g.fillStyle(W); g.lineStyle(4, K); g.fillCircle(48, 48, 24); g.strokeCircle(48, 48, 24); g.generateTexture('pu_sun', 96, 96); g.destroy(); }
+                { // pu_mult_big — character Mult: an Ethereum-style split rhombus.
+                    // Each half is two symmetric triangles meeting at a centre seam
+                    // with a notch (a 4-point facet), separated by a gap for the
+                    // body. Tall and thin; drawn near display size for a thin outline.
+                    const g = this.make.graphics(); const cx = 45, w = 32;
+                    g.fillStyle(W); g.lineStyle(4, K);
+                    const tri = (pts) => { g.fillPoints(pts, true); g.strokePoints(pts, true); };
+                    // top half (apex up; notch dips up from the shoulders) — pulled
+                    // close to centre so the halves nearly meet behind the body
+                    tri([{ x: cx, y: 32 }, { x: cx - w, y: 128 }, { x: cx, y: 106 }]);
+                    tri([{ x: cx, y: 32 }, { x: cx, y: 106 }, { x: cx + w, y: 128 }]);
+                    // bottom half (mirror: apex down; notch dips down)
+                    tri([{ x: cx - w, y: 152 }, { x: cx, y: 174 }, { x: cx, y: 248 }]);
+                    tri([{ x: cx, y: 174 }, { x: cx + w, y: 152 }, { x: cx, y: 248 }]);
+                    g.generateTexture('pu_mult_big', 90, 280); g.destroy();
+                }
             }
 
             spawnPowerupSprite(pu) {
@@ -4589,9 +4605,9 @@
             ensurePlayerFx(v) {
                 if (v.fx) return;
                 v.fx = {
-                    mult: this.add.image(0, 0, 'pu_mult').setDepth(8).setVisible(false).setScale(1.6),
-                    magL: this.add.image(0, 0, 'pu_magnet').setDepth(13).setVisible(false).setScale(0.55),
-                    magR: this.add.image(0, 0, 'pu_magnet').setDepth(13).setVisible(false).setScale(0.55).setFlipX(true),
+                    mult: this.add.image(0, 0, 'pu_mult_big').setDepth(8).setVisible(false).setScale(0.82),
+                    magL: this.add.image(0, 0, 'pu_magnet').setDepth(13).setVisible(false).setScale(0.65),
+                    magR: this.add.image(0, 0, 'pu_magnet').setDepth(13).setVisible(false).setScale(0.65).setFlipX(true),
                     halo: this.add.graphics().setDepth(9).setVisible(false),   // breathing sun, redrawn per frame
                 };
             }
@@ -4600,7 +4616,7 @@
             // origin. Blunt trapezoid rays that breathe — adjacent rays alternate
             // growing/shrinking — and no rotation.
             drawHalo(g, time) {
-                const inner = 42, W = 0xffffff, K = 0x000000, t = time / 350;
+                const inner = 42, W = 0xffffff, K = 0x000000, t = time / 175;   // breathes 2x faster
                 for (let i = 0; i < 12; i++) {
                     const a = i * Math.PI / 6;
                     const grow = Math.sin(t + (i % 2) * Math.PI);
@@ -4621,7 +4637,8 @@
             // (following each player) plus the bottom-centre HUD for the local
             // player. Soft shared pulse conveys the temporary nature.
             updatePowerupVisuals(time) {
-                const pulse = 1 + 0.06 * Math.sin(time / 220);
+                const pulse = 1 + 0.06 * Math.sin(time / 175);     // rhombus — matches the Second Wind ray breathe
+                const magPulse = 1 + 0.16 * Math.sin(time / 175);  // magnets pulse harder, same speed
 
                 for (const [id, v] of this.playerVisuals) {
                     this.ensurePlayerFx(v);
@@ -4638,13 +4655,13 @@
                         v.sprite.setAlpha(a); v.eyesContainer.setAlpha(a);
                     }
                     // Mult — large rhombus behind the body.
-                    fx.mult.setVisible(!!pw.mult && alive && shown).setPosition(px, py).setScale(1.6 * pulse);
+                    fx.mult.setVisible(!!pw.mult && alive && shown).setPosition(px, py).setScale(0.82 * pulse);
                     // Vacuum — a magnet either side.
                     const vac = !!pw.vacuum && alive && shown;
-                    fx.magL.setVisible(vac).setPosition(px - 52, py);
-                    fx.magR.setVisible(vac).setPosition(px + 52, py);
+                    fx.magL.setVisible(vac).setPosition(px - 68, py).setScale(0.65 * magPulse);
+                    fx.magR.setVisible(vac).setPosition(px + 68, py).setScale(0.65 * magPulse);
                     // Second Wind — non-rotating sun halo that breathes.
-                    const sw = !!pw.secondWind && alive && shown;
+                    const sw = pw.secondWind === true && alive && shown;   // halo only while held, not the spent linger
                     fx.halo.setVisible(sw);
                     if (sw) { fx.halo.clear(); this.drawHalo(fx.halo, time); fx.halo.setPosition(px, py); }
                 }
@@ -4670,7 +4687,12 @@
                         this.powerupHud.icons[t] = ic;
                     }
                     ic.setVisible(true).setPosition(cx + (i - (n - 1) / 2) * S, y);
-                    ic.setScale(ic.baseScaleX * pulse, ic.baseScaleY * pulse);
+                    const rem = myPw[t];
+                    const expiring = (typeof rem === 'number' && rem <= 4);
+                    const div = expiring ? 28 : 110;       // ~2x normally, ~8x in the final 4s
+                    const amp = expiring ? 0.13 : 0.07;    // and pulse harder when about to expire
+                    const ip = 1 + amp * Math.sin(time / div);
+                    ic.setScale(ic.baseScaleX * ip, ic.baseScaleY * ip);
                     ic.setAlpha(t === 'ghost' ? (0.5 + 0.2 * Math.sin(time / 260)) : 1);   // ghost shimmers
                     used.add(t);
                 });
