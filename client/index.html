@@ -4569,16 +4569,14 @@
                     // Each half is two symmetric triangles meeting at a centre seam
                     // with a notch (a 4-point facet), separated by a gap for the
                     // body. Tall and thin; drawn near display size for a thin outline.
-                    const g = this.make.graphics(); const cx = 45, w = 32;
+                    const g = this.make.graphics(); const cx = 45, w = 38;
                     g.fillStyle(W); g.lineStyle(4, K);
                     const tri = (pts) => { g.fillPoints(pts, true); g.strokePoints(pts, true); };
-                    // top half (apex up; notch dips up from the shoulders) — pulled
-                    // close to centre so the halves nearly meet behind the body
-                    tri([{ x: cx, y: 32 }, { x: cx - w, y: 128 }, { x: cx, y: 106 }]);
-                    tri([{ x: cx, y: 32 }, { x: cx, y: 106 }, { x: cx + w, y: 128 }]);
-                    // bottom half (mirror: apex down; notch dips down)
-                    tri([{ x: cx - w, y: 152 }, { x: cx, y: 174 }, { x: cx, y: 248 }]);
-                    tri([{ x: cx, y: 174 }, { x: cx + w, y: 152 }, { x: cx, y: 248 }]);
+                    // A rhombus split by a thin gap into two solid isosceles
+                    // triangles (no centre seam); the halves sit right against
+                    // the body, mostly hidden behind it with the tips peeking out.
+                    tri([{ x: cx, y: 32 }, { x: cx - w, y: 134 }, { x: cx + w, y: 134 }]);   // top (apex up)
+                    tri([{ x: cx - w, y: 146 }, { x: cx + w, y: 146 }, { x: cx, y: 248 }]);  // bottom (apex down)
                     g.generateTexture('pu_mult_big', 90, 280); g.destroy();
                 }
             }
@@ -4605,7 +4603,7 @@
             ensurePlayerFx(v) {
                 if (v.fx) return;
                 v.fx = {
-                    mult: this.add.image(0, 0, 'pu_mult_big').setDepth(8).setVisible(false).setScale(0.82),
+                    mult: this.add.image(0, 0, 'pu_mult_big').setDepth(8).setVisible(false).setScale(0.66),
                     magL: this.add.image(0, 0, 'pu_magnet').setDepth(13).setVisible(false).setScale(0.65),
                     magR: this.add.image(0, 0, 'pu_magnet').setDepth(13).setVisible(false).setScale(0.65).setFlipX(true),
                     halo: this.add.graphics().setDepth(9).setVisible(false),   // breathing sun, redrawn per frame
@@ -4637,8 +4635,9 @@
             // (following each player) plus the bottom-centre HUD for the local
             // player. Soft shared pulse conveys the temporary nature.
             updatePowerupVisuals(time) {
-                const pulse = 1 + 0.06 * Math.sin(time / 175);     // rhombus — matches the Second Wind ray breathe
+                const rhPulse = 1 + 0.2 * Math.sin(time / 175);    // rhombus halves extend/retract (vertical only), Second-Wind-like
                 const magPulse = 1 + 0.16 * Math.sin(time / 175);  // magnets pulse harder, same speed
+                const scorePulse = 1 + 0.12 * Math.sin(time / 88); // score under Mult — 2x bigger + 2x faster
 
                 for (const [id, v] of this.playerVisuals) {
                     this.ensurePlayerFx(v);
@@ -4655,7 +4654,7 @@
                         v.sprite.setAlpha(a); v.eyesContainer.setAlpha(a);
                     }
                     // Mult — large rhombus behind the body.
-                    fx.mult.setVisible(!!pw.mult && alive && shown).setPosition(px, py).setScale(0.82 * pulse);
+                    fx.mult.setVisible(!!pw.mult && alive && shown).setPosition(px, py).setScale(0.66, 0.66 * rhPulse);
                     // Vacuum — a magnet either side.
                     const vac = !!pw.vacuum && alive && shown;
                     fx.magL.setVisible(vac).setPosition(px - 68, py).setScale(0.65 * magPulse);
@@ -4673,6 +4672,13 @@
                 const me = this.latestPlayerData.get(mySessionId);
                 const myPw = (me && me.powerups) || {};
                 const active = POWERUP_TYPES.filter(t => myPw[t]);
+
+                // Mult gently pulses the score itself so the multiplier is felt
+                // (same speed as the powerup pulse). Yield while the score-bump
+                // tween is playing so the pop on each pickup still reads.
+                if (this.scoreText && this.tweens.getTweensOf(this.scoreText).length === 0) {
+                    this.scoreText.setScale(myPw.mult ? scorePulse : 1);
+                }
                 const S = 66, cx = CANVAS_WIDTH / 2, y = CANVAS_HEIGHT * 0.8, n = active.length;
                 const used = new Set();
                 active.forEach((t, i) => {
