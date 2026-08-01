@@ -512,7 +512,10 @@
     .cc-head { text-align: center; margin-bottom: 18px; }
     .cc-head h1 { font-size: 16px; font-weight: 700; letter-spacing: 0.4em; padding-left: 0.4em; }
     .cc-head .sub { font-size: 9px; color: var(--dim2); margin-top: 8px; letter-spacing: 0.36em; }
-    .cc-stage-wrap { position: relative; width: min(340px, 86vw); aspect-ratio: 1; margin-bottom: 6px; }
+    .cc-portrait { position: relative; padding: clamp(20px, 6vw, 34px); margin-bottom: 6px; }
+    .cc-marquee { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4; overflow: visible; }
+    .cc-marquee text { fill: var(--fg); font-family: inherit; font-size: 16px; font-weight: 700; letter-spacing: 0.16em; }
+    .cc-stage-wrap { position: relative; width: min(340px, 74vw); aspect-ratio: 1; }
     .cc-stage { position: absolute; inset: 0; background: var(--stage-bg); cursor: pointer; overflow: hidden; }
     .cc-stage svg { position: relative; z-index: 1; width: 100%; height: 100%; display: block; }
     .cc-floor { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
@@ -554,17 +557,21 @@
     <style>${CREATOR_CSS}</style>
     <div class="cc-scroll">
       <div class="cc-head">
-        <h1>BOLO LAB</h1>
         <div class="sub">&nbsp;</div>
       </div>
-      <div class="cc-stage-wrap">
-        <span class="cc-bracket tl"></span><span class="cc-bracket tr"></span>
-        <span class="cc-bracket bl"></span><span class="cc-bracket br"></span>
-        <div class="cc-stage">
-          <div class="cc-floor"></div>
-          <svg viewBox="${VIEWBOX}" xmlns="${SVG_NS}" preserveAspectRatio="xMidYMid meet">
-            <g id="cc-char-group"></g>
-          </svg>
+      <div class="cc-portrait">
+        <svg class="cc-marquee" xmlns="${SVG_NS}" viewBox="0 0 400 400" aria-hidden="true">
+          <text></text><text></text><text></text><text></text>
+        </svg>
+        <div class="cc-stage-wrap">
+          <span class="cc-bracket tl"></span><span class="cc-bracket tr"></span>
+          <span class="cc-bracket bl"></span><span class="cc-bracket br"></span>
+          <div class="cc-stage">
+            <div class="cc-floor"></div>
+            <svg viewBox="${VIEWBOX}" xmlns="${SVG_NS}" preserveAspectRatio="xMidYMid meet">
+              <g id="cc-char-group"></g>
+            </svg>
+          </div>
         </div>
       </div>
       <div class="cc-helper">&nbsp;</div>
@@ -596,6 +603,49 @@
 
         const sel = (s) => sroot.querySelector(s);
         const stageEl = sel('.cc-stage');
+
+        // ---- frame text (one static label per side of the portrait) -------------
+        const MARQUEE_TEXT = '· SHAPE YOUR SELF ·';
+        const MARQUEE_FONT = 16;
+        const portraitEl = sel('.cc-portrait');
+        const marqueeSvg = sel('.cc-marquee');
+        const wrapEl = sel('.cc-stage-wrap');
+        const marqueeTexts = marqueeSvg ? Array.from(marqueeSvg.querySelectorAll('text')) : [];
+
+        // Centre a label on each edge, each rotated the natural way for its side:
+        // top and bottom read left-to-right, the right side reads downwards and
+        // the left side upwards, so every one is right-way-up from its own edge.
+        function buildMarquee() {
+            if (!portraitEl || !marqueeSvg || marqueeTexts.length !== 4) return;
+            const r = portraitEl.getBoundingClientRect();
+            const w = Math.round(r.width), h = Math.round(r.height);
+            if (!w || !h) return;
+            const innerW = wrapEl ? wrapEl.getBoundingClientRect().width : w;
+            const band = Math.max(14, (w - innerW) / 2);   // padding band around the stage
+            const c = band / 2;                             // its centre line
+            marqueeSvg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+            const place = [
+                { x: w / 2, y: c, rot: 0 },    // top
+                { x: w - c, y: h / 2, rot: 90 },   // right, reading down
+                { x: w / 2, y: h - c, rot: 0 },    // bottom
+                { x: c, y: h / 2, rot: -90 },  // left, reading up
+            ];
+            marqueeTexts.forEach((t, i) => {
+                const p = place[i];
+                t.textContent = MARQUEE_TEXT;
+                t.setAttribute('text-anchor', 'middle');
+                t.setAttribute('dominant-baseline', 'central');
+                t.setAttribute('font-size', MARQUEE_FONT);
+                t.setAttribute('transform', `translate(${p.x} ${p.y}) rotate(${p.rot})`);
+            });
+            // Shrink to fit if the phrase is wider than the edge it sits on.
+            const avail = Math.min(w, h) - band * 2;
+            const natural = marqueeTexts[0].getComputedTextLength() || 0;
+            if (natural > avail && avail > 0) {
+                const fs = Math.max(7, MARQUEE_FONT * avail / natural);
+                marqueeTexts.forEach(t => t.setAttribute('font-size', fs.toFixed(2)));
+            }
+        }
         const charGroup = sel('#cc-char-group');
         const controlsRoot = sel('.cc-controls');
         let eyesGroup = null, pupilL = null, pupilR = null;
@@ -797,6 +847,7 @@
         function onKey(e) { if (e.key === 'Escape') cancel(); }
 
         stageEl.addEventListener('click', triggerSqueeze);
+        window.addEventListener('resize', buildMarquee);
         window.addEventListener('mousemove', onMove);
         window.addEventListener('mouseleave', onLeave);
         window.addEventListener('blur', onLeave);
@@ -806,6 +857,7 @@
         function teardown() {
             running = false;
             cancelAnimationFrame(rafId);
+            window.removeEventListener('resize', buildMarquee);
             window.removeEventListener('mousemove', onMove);
             window.removeEventListener('mouseleave', onLeave);
             window.removeEventListener('blur', onLeave);
@@ -822,6 +874,10 @@
         // ---- boot ---------------------------------------------------------------
         buildControls();
         rebuild();
+        buildMarquee();
+        // glyph metrics can shift once the webfont lands — re-measure then
+        requestAnimationFrame(buildMarquee);
+        if (document.fonts && document.fonts.ready) document.fonts.ready.then(buildMarquee).catch(() => { });
         blinkAnim.nextBlinkAt = performance.now() + rand(2500, 4500);
         eyeAnim.nextIdleAt = performance.now() + rand(800, 2000);
         rafId = requestAnimationFrame(tick);
