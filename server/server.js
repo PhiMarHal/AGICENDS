@@ -43,6 +43,10 @@ const SIM = {
     OBSTACLE_SIZE: 45,
     BLOCK_RENDER_SIZE: 90,
     FLAP_COOLDOWN_MS: 200,
+    // How long an unusable flap intent is held before being discarded. Long
+    // enough to bridge the cooldown, short enough that a stale tap never fires
+    // noticeably later than the player pressed it.
+    FLAP_BUFFER_MS: 120,
 
     HAZARD_BASE_SPEED: 80,
     HAZARD_INCREASE: 5,
@@ -564,6 +568,7 @@ function makePlayer(id) {
         score: 0,
         lastFlapTime: -Infinity,
         flapQueued: false,
+        flapQueuedAt: 0,
         nextFlapDirection: 1,
         lastStunTime: -Infinity,
         inRound: false,   // true only for players who clicked READY before countdown ended
@@ -582,6 +587,7 @@ function resetPlayer(p) {
     p.score = 0;
     p.lastFlapTime = -Infinity;
     p.flapQueued = false;
+    p.flapQueuedAt = 0;
     p.nextFlapDirection = 1;
     p.lastStunTime = -Infinity;
     p.inRound = false;
@@ -637,6 +643,9 @@ function queueFlap(match, id) {
     const p = match.players.get(id);
     if (!p || !p.alive || !p.inRound) return;
     if (match.elapsedMs - p.lastStunTime < SIM.STUN_DURATION_MS) return;
+    // Stamp only on the leading edge, so a held key does not keep refreshing
+    // the buffer window forever.
+    if (!p.flapQueued) p.flapQueuedAt = match.elapsedMs;
     p.flapQueued = true;
 }
 
@@ -923,8 +932,20 @@ function step(match, deltaSeconds) {
 
         const stunned = (match.elapsedMs - p.lastStunTime) < SIM.STUN_DURATION_MS;
         if (p.flapQueued) {
-            p.flapQueued = false;
-            if (!stunned && match.elapsedMs - p.lastFlapTime >= SIM.FLAP_COOLDOWN_MS) {
+            // Hold the intent until it can actually be used. Clearing it on a
+            // tick where the cooldown had not yet elapsed threw a real input
+            // away and forced a wait for the next message to arrive. Because
+            // client sends and server ticks both run at ~60 Hz but are not
+            // synchronised, some tick windows received two messages (one lost
+            // to the boolean) and some received none, and each miss cost a full
+            // tick — which is what made the flap interval wander between 200
+            // and 260 ms instead of holding at the 200 ms cooldown.
+            const ready = match.elapsedMs - p.lastFlapTime >= SIM.FLAP_COOLDOWN_MS;
+            const stale = match.elapsedMs - p.flapQueuedAt > SIM.FLAP_BUFFER_MS;
+            if (ready || stunned || stale) {
+                p.flapQueued = false;
+            }
+            if (!stunned && ready) {
                 p.vy = -SIM.JUMP_FORCE;
                 p.vx = SIM.HORIZONTAL_SPEED * p.nextFlapDirection;
                 p.facingRight = p.nextFlapDirection === 1;

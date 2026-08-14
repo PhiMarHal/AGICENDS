@@ -3839,6 +3839,7 @@
         const RECONCILE_LERP = 0.15;
         const RECONCILE_VEL_LERP = 0.08;
         const POST_FLAP_VEL_GRACE_MS = 150;
+        const RECONCILE_DEADBAND_X = 45;   // px of horizontal gap prediction already explains
 
         const INTERP_DELAY_MS = 100;
         const INTERP_BUFFER_MAX_AGE_MS = 500;
@@ -5943,7 +5944,16 @@
                 if (!this.myState || !this.myServerTarget) return;
                 if (!this.myState.alive) return;
                 const t = this.myServerTarget;
-                this.myState.x += (t.x - this.myState.x) * RECONCILE_LERP;
+                // The flap oscillation is purely horizontal, so that is the
+                // only axis where the server's lag is systematically mistaken
+                // for error. Vertical is left fully corrected: it is monotonic
+                // while climbing, and it is the axis that blocks and spikes are
+                // judged on, so keeping it tight keeps collisions honest.
+                const dx = t.x - this.myState.x;
+                const adx = Math.abs(dx);
+                if (adx > RECONCILE_DEADBAND_X) {
+                    this.myState.x += Math.sign(dx) * (adx - RECONCILE_DEADBAND_X) * RECONCILE_LERP;
+                }
                 this.myState.y += (t.y - this.myState.y) * RECONCILE_LERP;
                 const now = performance.now();
                 const sinceLastFlap = now - this.myState.lastFlapTime;
