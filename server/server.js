@@ -643,9 +643,11 @@ function queueFlap(match, id) {
     const p = match.players.get(id);
     if (!p || !p.alive || !p.inRound) return;
     if (match.elapsedMs - p.lastStunTime < SIM.STUN_DURATION_MS) return;
-    // Stamp only on the leading edge, so a held key does not keep refreshing
-    // the buffer window forever.
-    if (!p.flapQueued) p.flapQueuedAt = match.elapsedMs;
+    // Stamp on every message. While the key is held the client resends each
+    // frame, so the intent stays fresh and never expires. Once the player lets
+    // go the resends stop, the stamp ages, and a tap that could not be used
+    // within FLAP_BUFFER_MS is discarded rather than firing late.
+    p.flapQueuedAt = match.elapsedMs;
     p.flapQueued = true;
 }
 
