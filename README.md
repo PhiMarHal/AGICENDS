@@ -54,16 +54,13 @@ Functional:
 - [x] Ready/lobby system with 10-second join window and "[name] joined" notifications
 - [x] Leaderboard on round-over screen
 - [x] Off-screen proximity indicators (other players + spike line)
-- [x] Music (21-track shuffled playlist with silence between tracks)
+- [x] Music (shuffled playlist from singleplayer version with silence between tracks)
 - [x] Spectator camera (follows leading player; activates on join-miss or 2 s after death)
 - [x] Spectator score display (shows spectated player's live score)
 - [x] Sprites visible during countdown lobby (ready players appear at spawn before round starts)
 - [x] Camera snaps to spawn on each round reset
-
-Backlog:
-
-- [ ] ANGELS mode (cooperative, shared score, interval revives)
-- [ ] DEVILS mode (competitive, highest-score wins)
-- [ ] Real player names instead of session IDs
+- [x] ANGELS mode (cooperative, shared score, interval revives)
+- [x] DEVILS mode (competitive, highest-score wins)
+- [x] Real player names instead of session IDs
 - [ ] Production deployment (DNS, HTTPS via reverse proxy, persistent service)
 - [ ] Mobile performance investigation
