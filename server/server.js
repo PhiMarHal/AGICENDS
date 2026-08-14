@@ -76,7 +76,7 @@ const SIM = {
     POWERUP_SIZE: 40,                  // pickup hitbox / render size (world units)
     POWERUP_PICK_MULT: 1.4,            // pickup-radius leniency around POWERUP_SIZE
     POWERUP_TYPES: ['mult', 'vacuum', 'ghost', 'secondWind'],
-    POWERUP_DURATIONS: { mult: 16000, vacuum: 16000, ghost: 16000, secondWind: 64000 },
+    POWERUP_DURATIONS: { mult: 16000, vacuum: 16000, ghost: 8000, secondWind: 64000 },
     MULT_FACTOR: 4,                    // triangle worth 4 * MULT_FACTOR while Mult active
     VACUUM_RADIUS: 360,                // = CANVAS_WIDTH / 2; coins within are pulled in
     VACUUM_PULL_SPEED: 900,            // px/s coins move toward the player
