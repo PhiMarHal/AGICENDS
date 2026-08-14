@@ -1,8 +1,8 @@
-# AGISCENDS auth + stats Worker
+# AGICENDS auth + stats Worker
 
 Cloudflare Worker handling all authentication (bespoke username+password,
 plus Sign In With Ethereum) and persistent match-result storage for
-AGISCENDS. The game server (`server.js`) stays focused on gameplay; it
+AGICENDS. The game server (`server.js`) stays focused on gameplay; it
 talks to this Worker over HTTPS to verify session tokens and record
 match results.
 
@@ -98,7 +98,7 @@ OAuth provider secrets get added the same way later, per provider.
 Update `ALLOWED_ORIGINS` to include your domain(s):
 
 ```
-ALLOWED_ORIGINS = "http://localhost:2567,https://agiscends.example.com"
+ALLOWED_ORIGINS = "http://localhost:2567,https://agicends.example.com"
 ```
 
 ### 7. Sign In With Ethereum

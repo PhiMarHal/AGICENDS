@@ -1,4 +1,4 @@
-// AGISCENDS server.
+// AGICENDS server.
 
 const express = require('express');
 const http = require('http');
@@ -1824,6 +1824,6 @@ setInterval(() => {
 }, TICK_INTERVAL_MS);
 
 server.listen(PORT, () => {
-    console.log(`AGISCENDS server listening on http://localhost:${PORT}/ (tick rate: ${TICK_RATE_HZ} Hz)`);
+    console.log(`AGICENDS server listening on http://localhost:${PORT}/ (tick rate: ${TICK_RATE_HZ} Hz)`);
     console.log(`Serving client from: ${CLIENT_DIR}`);
 });

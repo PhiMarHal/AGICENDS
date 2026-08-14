@@ -1,4 +1,4 @@
--- AGISCENDS auth + stats schema.
+-- AGICENDS auth + stats schema.
 --
 -- D1 is SQLite under the hood, so anything you'd write for SQLite works.
 -- Apply this file with:

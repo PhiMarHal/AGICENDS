@@ -1,4 +1,4 @@
-// AGISCENDS match-result storage.
+// AGICENDS match-result storage.
 //
 //   POST /stats/record         — server-to-server write (requires header
 //                                `X-Game-Server-Secret: <shared secret>`)

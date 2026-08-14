@@ -1,5 +1,5 @@
 /* =============================================================================
- * AGISCENDS · character.js
+ * AGICENDS · character.js
  * -----------------------------------------------------------------------------
  * Single source of truth for the flying-creature's appearance, shared by both
  * the in-game renderer and the standalone creator UI. Exposes `window.Character`

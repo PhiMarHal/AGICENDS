@@ -1,4 +1,4 @@
-// AGISCENDS authentication — everything auth-related in one file.
+// AGICENDS authentication — everything auth-related in one file.
 //
 // Sections (Ctrl+F the §SECTION markers):
 //   §JWT                — HS256 sign/verify, no external dependency
@@ -539,7 +539,7 @@ import { keccak_256 } from '@noble/hashes/sha3';
 
 const SIWE_NONCE_TTL_SEC = 600;   // 10 min
 const SIWE_CLAIM_TTL_SEC = 600;   // 10 min
-const SIWE_STATEMENT = 'Sign in to AGISCENDS.';
+const SIWE_STATEMENT = 'Sign in to AGICENDS.';
 
 // Random 16-byte hex token. Used for both nonces and claim tickets —
 // same security properties (single-use, server-only, short TTL).

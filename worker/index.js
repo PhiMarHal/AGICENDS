@@ -1,4 +1,4 @@
-// AGISCENDS auth + stats Worker — entry point.
+// AGICENDS auth + stats Worker — entry point.
 //
 // Every incoming HTTP request lands in the default `fetch` export at the
 // bottom of this file. It passes the request to a tiny router, which
@@ -195,7 +195,7 @@ function handlePreflight(request, env) {
 const router = new Router();
 
 // Health / sanity.
-router.get('/', () => json({ ok: true, service: 'agiscends-auth' }));
+router.get('/', () => json({ ok: true, service: 'agicends-auth' }));
 router.get('/health', () => json({ ok: true }));
 
 // Session — game server hits /auth/verify on each WebSocket connect.

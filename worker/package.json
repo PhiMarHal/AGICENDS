@@ -1,9 +1,9 @@
 {
-    "name": "agiscends-auth",
+    "name": "agicends-auth",
     "version": "0.1.0",
     "private": true,
     "type": "module",
-    "description": "AGISCENDS auth + stats Cloudflare Worker",
+    "description": "AGICENDS auth + stats Cloudflare Worker",
     "scripts": {
         "dev": "wrangler dev",
         "deploy": "wrangler deploy",

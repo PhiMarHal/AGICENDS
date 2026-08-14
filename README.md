@@ -1,4 +1,4 @@
-# AGISCENDS
+# AGICENDS
 
 Multiplayer arcade ascent game. Up to 8 players per match. Two modes are planned:
 

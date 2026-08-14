@@ -1,4 +1,4 @@
-# AGISCENDS — Cheat Sheet
+# AGICENDS — Cheat Sheet
 
 Reference document for everyday development. Lives at the project root.
 
@@ -7,7 +7,7 @@ Reference document for everyday development. Lives at the project root.
 ## Project layout
 
 ```
-AGISCENDS/
+AGICENDS/
 ├── server/
 │   ├── server.js       # the entire server: Express + WebSocket + simulation
 │   ├── package.json    # dependencies (express, ws)
@@ -32,7 +32,7 @@ cd server
 npm start
 ```
 
-You should see `AGISCENDS server listening on http://localhost:2567/ (tick rate: 60 Hz)`. Open that URL in a browser to play. To stop the server, `Ctrl+C` in the terminal.
+You should see `AGICENDS server listening on http://localhost:2567/ (tick rate: 60 Hz)`. Open that URL in a browser to play. To stop the server, `Ctrl+C` in the terminal.
 
 The server does **not** auto-restart on file changes. After editing `server.js`, stop and restart manually. After editing `client/index.html`, just refresh the browser tab — the server serves whatever's currently on disk.
 
@@ -374,7 +374,7 @@ To play with friends across the internet without setting up DNS or a real server
 
 1. Install ngrok from https://ngrok.com/download. Sign up for a free account to get an auth token.
 2. Run `ngrok config add-authtoken <YOUR_TOKEN>` once.
-3. Start the AGISCENDS server normally (`cd server && npm start`).
+3. Start the AGICENDS server normally (`cd server && npm start`).
 4. In a second terminal, run `ngrok http 2567`. Ngrok prints a "Forwarding" URL like `https://abc123.ngrok-free.app`.
 5. Share that URL with your friends.
 
