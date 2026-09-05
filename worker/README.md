@@ -154,3 +154,7 @@ working end-to-end.
 
 The Worker URL the game server will need:
 `https://<your-worker-name>.workers.dev` (or your custom subdomain).
+
+## 16-player update
+
+`stats.js` now inserts participants through `json_each` in one SQL statement and applies rating deltas atomically. Elo K is normalized over authenticated human opponents, so adding bots or increasing the cap does not multiply rating swings. Bots are anonymous result rows and are excluded from Elo. Deploy this Worker update alongside the game update; no schema change is required.

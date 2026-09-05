@@ -50,22 +50,13 @@ export async function recordMatch(request, env) {
     );
     const matchId = matchInsert.meta.last_row_id;
 
-    const playerStmts = players.map(p =>
-        env.DB.prepare(
-            `INSERT INTO match_players(match_id, user_id, display_name,
-                                       final_score, finishing_rank)
-             VALUES(?, ?, ?, ?, ?)`
-        ).bind(
-            matchId,
-            p.user_id ?? null,
-            p.display_name,
-            p.final_score,
-            p.finishing_rank,
-        )
-    );
-
     try {
-        await env.DB.batch(playerStmts);
+        // One SQL statement regardless of room size; avoid Free-plan query limits.
+        await run(env,
+            `INSERT INTO match_players(match_id, user_id, display_name, final_score, finishing_rank)
+             SELECT ?, json_extract(value, '$.user_id'), json_extract(value, '$.display_name'),
+                    json_extract(value, '$.final_score'), json_extract(value, '$.finishing_rank')
+             FROM json_each(?)`, matchId, JSON.stringify(players));
     } catch (err) {
         // Roll back the matches row so we don't leave an orphan.
         console.error('match_players batch failed, rolling back match', matchId, err);
@@ -103,7 +94,7 @@ export async function recordMatch(request, env) {
 // "no change"). Returns {} if fewer than 2 authed players. Persists
 // non-zero deltas in a single batched transaction.
 async function updateMmrForMatch(env, players) {
-    const K = 32;
+    const K = 32; // Match-wide K, normalized across human opponents below.
 
     const authed = players.filter(p => p.user_id != null);
     if (authed.length < 2) return {};
@@ -146,32 +137,31 @@ async function updateMmrForMatch(env, players) {
             const Ea = 1 / (1 + Math.pow(10, (Rb - Ra) / 400));
             const Eb = 1 - Ea;
 
-            deltas.set(a.user_id, deltas.get(a.user_id) + K * (sa - Ea));
-            deltas.set(b.user_id, deltas.get(b.user_id) + K * (sb - Eb));
+            deltas.set(a.user_id, deltas.get(a.user_id) + K * (sa - Ea) / (valid.length - 1));
+            deltas.set(b.user_id, deltas.get(b.user_id) + K * (sb - Eb) / (valid.length - 1));
         }
     }
 
     // Round to integers, build return object, and batch-write changes.
     const result = {};
-    const updateStmts = [];
+    const updates = [];
     for (const [uid, delta] of deltas) {
         const rounded = Math.round(delta);
-        const oldMmr = mmrById.get(uid);
-        const newMmr = oldMmr + rounded;
-        result[uid] = { delta: rounded, new_mmr: newMmr };
-        if (rounded !== 0) {
-            updateStmts.push(
-                // peak_mmr only ever moves up — SQLite's scalar MAX
-                // keeps the lifetime peak when this rating change is
-                // a drop. Atomic with the mmr update.
-                env.DB.prepare(
-                    'UPDATE users SET mmr = ?, peak_mmr = MAX(peak_mmr, ?) WHERE id = ?'
-                ).bind(newMmr, newMmr, uid)
-            );
-        }
+        result[String(uid)] = { delta: rounded, new_mmr: mmrById.get(uid) + rounded };
+        if (rounded) updates.push({ id: uid, delta: rounded });
     }
-    if (updateStmts.length > 0) {
-        await env.DB.batch(updateStmts);
+    if (updates.length) {
+        // Apply deltas atomically if independent rooms complete concurrently.
+        const rows = await all(env,
+            `WITH changes AS (
+                SELECT json_extract(value, '$.id') AS id, json_extract(value, '$.delta') AS delta
+                FROM json_each(?)
+             )
+             UPDATE users SET
+                mmr = mmr + (SELECT delta FROM changes WHERE changes.id = users.id),
+                peak_mmr = MAX(peak_mmr, mmr + (SELECT delta FROM changes WHERE changes.id = users.id))
+             WHERE id IN (SELECT id FROM changes) RETURNING id, mmr`, JSON.stringify(updates));
+        for (const row of rows) result[String(row.id)].new_mmr = row.mmr;
     }
     return result;
 }
@@ -195,7 +185,7 @@ function validateMatchBody(body) {
     if (typeof ended_at !== 'number' || ended_at <= 0) {
         return { error: 'invalid_body', message: 'ended_at is required (positive number, unix ms).' };
     }
-    if (!Array.isArray(players) || players.length === 0) {
+    if (!Array.isArray(players) || players.length === 0 || players.length > 64) {
         return { error: 'invalid_body', message: 'players must be a non-empty array.' };
     }
 

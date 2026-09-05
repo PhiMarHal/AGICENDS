@@ -7,6 +7,9 @@
     <title>AGICENDS</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.87.0/dist/phaser.min.js"></script>
     <script src="character.js"></script>
+    <script src="simulation.js"></script>
+    <script src="protocol.js"></script>
+    <script src="prediction.js"></script>
     <style>
         html,
         body {
@@ -3806,23 +3809,10 @@
         const EYE_LOOK_MAX_Y = 6;
         const WORLD_HEIGHT_UP = 10000000;
 
-        const SIM = {
-            GRAVITY: 1600,
-            JUMP_FORCE: 650,
-            HORIZONTAL_SPEED: 400,
-            MAX_FALL_SPEED: 800,
-            MAX_VX: 800, MAX_VY: 2000,
-            WALL_THICKNESS: 35,
-            FLAP_COOLDOWN_MS: 200,
-            START_Y_OFFSET: 540,  // = CANVAS_HEIGHT / 2; players spawn at vertical centre
-            PLAYER_RADIUS: 30,
-            PLAYER_BOUNCE: 2.0,
-            STUN_DURATION_MS: 400,
-            PENTAGON_SIZE: 240,
-            HEXAGON_SIZE: 100,
-            HEPTAGON_SIZE: 64,
-            OCTAGON_SIZE: 135,
-        };
+        const SIM = Object.assign({}, AGSim.SIM, {
+            PENTAGON_SIZE: AGSim.SIM.PENTAGON.size, HEXAGON_SIZE: AGSim.SIM.HEXAGON.size,
+            HEPTAGON_SIZE: AGSim.SIM.HEPTAGON.size, OCTAGON_SIZE: AGSim.SIM.OCTAGON.size,
+        });
 
         const ROUND_WAITING = 'waiting';
         const ROUND_COUNTDOWN = 'countdown';
@@ -3836,12 +3826,7 @@
             if (s.vy < -SIM.MAX_VY) s.vy = -SIM.MAX_VY;
         }
 
-        const RECONCILE_LERP = 0.15;
-        const RECONCILE_VEL_LERP = 0.08;
-        const POST_FLAP_VEL_GRACE_MS = 150;
-        const RECONCILE_DEADBAND_X = 45;   // px of horizontal gap prediction already explains
-
-        const INTERP_DELAY_MS = 100;
+        const INTERP_DELAY_MS = 75;
         const INTERP_BUFFER_MAX_AGE_MS = 500;
 
         const PROXIMITY_TRIANGLE_SIZE = 22;
@@ -3863,12 +3848,24 @@
         };
 
         // Status is now silent (UI elements handle display)
-        function setStatus(t) { /* no-op: status displayed via DOM elements */ }
+        function setStatus(t) {
+            let el=document.getElementById('connection-status');
+            if(!el){el=document.createElement('div');el.id='connection-status';el.style.cssText='position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:999;background:#fff;color:#000;padding:8px;font:14px Arial;';document.body.appendChild(el);}
+            el.textContent=t==='disconnected'?'Connection lost — reload to reconnect.':t==='connecting...'?'Connecting…':'';
+            el.hidden=!el.textContent;
+        }
 
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = wsProtocol + '//' + window.location.host;
 
         let ws = null;
+        let roster = new Map();
+        let pingTimer = null;
+        const predictor = new AGPredictor(command => {
+            if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(command));
+        });
+        window.addEventListener('blur', () => predictor.input(false));
+        document.addEventListener('visibilitychange', () => { if (document.hidden) predictor.input(false); });
         let mySessionId = null;
         let pendingWorldInit = null;
         let pendingSnapshots = [];
@@ -3890,11 +3887,25 @@
             if (token) params.push('token=' + encodeURIComponent(token));
             const fullUrl = wsUrl + '/?' + params.join('&');
             ws = new WebSocket(fullUrl);
-            ws.addEventListener('open', () => setStatus('connected'));
+            ws.binaryType = 'arraybuffer';
+            roster = new Map();
+            clearInterval(pingTimer);
+            ws.addEventListener('open', () => {
+                setStatus('connected');
+                const ping = () => { if(ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:'ping',t:performance.now()})); };
+                ping();pingTimer=setInterval(ping,2000);
+            });
             ws.addEventListener('message', (event) => {
                 let msg;
-                try { msg = JSON.parse(event.data); } catch { return; }
-                if (msg.type === 'welcome') {
+                try { msg = event.data instanceof ArrayBuffer ? AGProtocol.decode(event.data, roster) : JSON.parse(event.data); } catch (e) { console.error('Network packet:',e); ws.close(1002,'Protocol mismatch'); return; }
+                if (msg.type === 'roster') {
+                    roster=new Map(msg.players.map(p=>[p.netId,p]));
+                } else if (msg.type === 'pong') {
+                    predictor.rtt=Math.max(0,Math.min(1000,performance.now()-msg.t));
+                } else if (msg.type === 'join_rejected') {
+                    if(window.__scene)window.__scene.joinTapped=false;
+                    alert(msg.reason);
+                } else if (msg.type === 'welcome') {
                     mySessionId = msg.sessionId;
                     if (msg.mode) {
                         currentMode = msg.mode;
@@ -3927,12 +3938,8 @@
                     }
                 }
             });
-            ws.addEventListener('close', () => setStatus('disconnected'));
+            ws.addEventListener('close', () => { clearInterval(pingTimer); setStatus('disconnected'); });
             ws.addEventListener('error', (e) => { console.error('ws error', e); setStatus('error'); });
-        }
-
-        function sendFlap() {
-            if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'flap' }));
         }
 
         function sendReady() {
@@ -3963,7 +3970,7 @@
                 this.myState = null;
                 this.myServerTarget = null;
                 this.interpBuffers = new Map();
-                this.latestServerTime = 0;
+                this.latestServerTime = 0; this.latestSnapshotAt = performance.now();
 
                 this.latestPlayerData = new Map();
                 this.latestSpikeY = null;
@@ -4054,25 +4061,15 @@
                 // ready to play.
             }
 
-            spawnPlaceholderSideWalls() {
-                if (this.sideWallSprites.length > 0) return;   // already populated
-                const wt = WALL_THICKNESS;
-                const size = SIDE_WALL_DISPLAY_SIZE;
-                // Match the server's wall pattern EXACTLY: floor-aligned to
-                // multiples of WALL_THICKNESS from a fixed grid. Same start
-                // point (CANVAS_HEIGHT + 200) and same step. When the real
-                // world_init arrives, applyWorldInit destroys these and the
-                // server's segments spawn at identical y values — no jolt,
-                // no overlap, no off-by-one alignment drift.
-                const startY = CANVAS_HEIGHT + 200;
-                const firstY = Math.floor(startY / wt) * wt;
-                for (let y = firstY; y > -wt; y -= wt) {
-                    const left = this.add.image(wt / 2, y, 'block')
-                        .setDisplaySize(size, size).setDepth(2);
-                    const right = this.add.image(CANVAS_WIDTH - wt / 2, y, 'block')
-                        .setDisplaySize(size, size).setDepth(2);
-                    this.sideWallSprites.push(left, right);
+            spawnPlaceholderSideWalls() { this.updateWallPool(); }
+            updateWallPool() {
+                const size=SIDE_WALL_DISPLAY_SIZE, count=Math.ceil(CANVAS_HEIGHT/WALL_THICKNESS)+6;
+                while(this.sideWallSprites.length<count*2) {
+                    this.sideWallSprites.push(this.add.image(WALL_THICKNESS/2,0,'block').setDisplaySize(size,size).setDepth(2));
+                    this.sideWallSprites.push(this.add.image(CANVAS_WIDTH-WALL_THICKNESS/2,0,'block').setDisplaySize(size,size).setDepth(2));
                 }
+                const first=Math.floor(this.cameras.main.scrollY/WALL_THICKNESS)*WALL_THICKNESS-3*WALL_THICKNESS;
+                for(let i=0;i<count;i++)this.sideWallSprites[i*2].y=this.sideWallSprites[i*2+1].y=first+i*WALL_THICKNESS;
             }
 
             generateTextures() {
@@ -4449,17 +4446,22 @@
 
                 for (const v of this.playerVisuals.values()) this.destroyPlayerVisual(v);
                 this.playerVisuals.clear();
+                this.textureEpoch=(this.textureEpoch||0)+1;
+                for(const key of this.textures.getTextureKeys())if(key.startsWith('charbody_')||key.startsWith('charpupil_'))this.textures.remove(key);
                 this.interpBuffers.clear();
                 this.latestPlayerData.clear();
                 this.previousAlive.clear();
 
                 this.latestSpikeY = null;
-                this.latestServerTime = 0;
+                this.latestServerTime = 0; this.latestSnapshotAt = performance.now();
                 this.myState = null;
                 this.myServerTarget = null;
                 this.cameraTarget = null;
                 this.cameras.main.stopFollow();
 
+                this.visualCorrection={x:0,y:0};
+                this.scoreboardKey = null;
+                for(const p of this.particlePool||[]) {p.life=0;p.sprite.setVisible(false);}
                 this.hideGameOverUI();
                 this.gameOverOverlayShown = false;
                 this.hideCountdownUI();
@@ -4478,6 +4480,7 @@
             }
 
             applyWorldInit(msg) {
+                predictor.init(msg);
                 if (this.blockSprites.size > 0 || this.playerVisuals.size > 0 ||
                     this.sideWallSprites.length > 0 || this.gameOverOverlayShown) {
                     this.resetAllVisualState();
@@ -4497,16 +4500,18 @@
             }
 
             spawnBlockSprite(b) {
+                if(this.blockSprites.has(b.id))return;
                 const sprite = this.add.image(b.x, b.y, 'block').setDepth(2);
                 if (b.scale && b.scale !== 1) sprite.setScale(b.scale);
                 this.blockSprites.set(b.id, sprite);
             }
 
             spawnCoinSprite(c) {
+                if(this.coinSprites.has(c.id))return;
                 const sprite = this.add.image(c.x, c.y, 'coin');
                 sprite.setDisplaySize(COIN_SIZE, COIN_SIZE).setDepth(3);
                 this.coinSprites.set(c.id, sprite);
-                this.tweens.add({ targets: sprite, angle: 360, duration: 1200, repeat: -1 });
+
             }
 
             // Generate the powerup icon textures once (white fill, dark outline).
@@ -4583,6 +4588,7 @@
             }
 
             spawnPowerupSprite(pu) {
+                if(this.powerupSprites.has(pu.id))return;
                 const key = pu.type === 'mult' ? 'pu_mult'
                     : pu.type === 'vacuum' ? 'pu_magnet'
                         : pu.type === 'ghost' ? 'pu_ghost' : 'pu_sun';
@@ -4645,7 +4651,7 @@
                     const data = this.latestPlayerData.get(id);
                     const pw = (data && data.powerups) || {};
                     const alive = !data || data.alive;
-                    const shown = v.sprite.visible;
+                    const shown = v.sprite.visible && this.effectVisible(v.sprite.x,v.sprite.y);
                     const px = v.sprite.x, py = v.sprite.y;
                     const fx = v.fx;
 
@@ -4718,6 +4724,7 @@
             }
 
             spawnPentagonSprite(p) {
+                if(this.pentagonSprites.has(p.id))return;
                 const sprite = this.add.image(p.x, p.y, 'pentagon').setDepth(4);
                 sprite.setDisplaySize(SIM.PENTAGON_SIZE, SIM.PENTAGON_SIZE);
                 if (p.angle != null) sprite.angle = p.angle;
@@ -4729,6 +4736,7 @@
             }
 
             spawnHexagonPairSprite(pair) {
+                if(this.hexagonPairSprites.has(pair.id))return;
                 const leftHex = this.add.image(pair.leftX, pair.y, 'hexagon').setDepth(4);
                 leftHex.setDisplaySize(SIM.HEXAGON_SIZE, SIM.HEXAGON_SIZE);
                 const rightHex = this.add.image(pair.rightX, pair.y, 'hexagon').setDepth(4);
@@ -4746,6 +4754,7 @@
             }
 
             spawnHeptagonSprite(h) {
+                if(this.heptagonSprites.has(h.id))return;
                 const sprite = this.add.image(h.x, h.y, 'heptagon').setDepth(4);
                 sprite.setDisplaySize(SIM.HEPTAGON_SIZE, SIM.HEPTAGON_SIZE);
                 if (h.angle != null) sprite.angle = h.angle;
@@ -4759,12 +4768,14 @@
             }
 
             spawnOctagonSprite(o) {
+                if(this.octagonSprites.has(o.id))return;
                 const sprite = this.add.image(o.x, o.y, 'octagon').setDepth(4);
                 sprite.setDisplaySize(SIM.OCTAGON_SIZE, SIM.OCTAGON_SIZE);
                 this.octagonSprites.set(o.id, sprite);
             }
 
             spawnProjectileSprite(p) {
+                if(this.projectileSprites.has(p.id))return;
                 const sprite = this.add.image(p.x, p.y, 'block').setDepth(3);
                 sprite.setDisplaySize(BLOCK_RENDER_SIZE, BLOCK_RENDER_SIZE);
                 if (p.scale && p.scale !== 1) sprite.setScale(p.scale);
@@ -5073,6 +5084,8 @@
             }
 
             updateScoreboard(players) {
+                const key=JSON.stringify(Object.entries(players).filter(([id,p])=>p.inRound).map(([id,p])=>[id,p.score,p.displayName]));
+                if(this.scoreboardKey===key)return;this.scoreboardKey=key;
                 // In Angels mode the team shares one score, already displayed
                 // in the top counter. The per-player scoreboard would just be
                 // a repeating list of identical numbers — and its absence
@@ -5117,6 +5130,18 @@
             }
 
             applySnapshot(snap) {
+                snap.myReady = (snap.readyPlayerIds || []).includes(mySessionId);
+                this.latestSnapshotAt = performance.now();
+                predictor.advance();
+                const oldPrediction=predictor.player(mySessionId);
+                const oldPosition=oldPrediction?{x:oldPrediction.x,y:oldPrediction.y}:null;
+                predictor.receive(snap,mySessionId);
+                const corrected=predictor.player(mySessionId);
+                if(oldPosition && corrected && corrected.alive && snap.roundState==='running') {
+                    const dx=oldPosition.x-corrected.x,dy=oldPosition.y-corrected.y;
+                    const old=this.visualCorrection||{x:0,y:0};
+                    this.visualCorrection=Math.hypot(dx,dy)<120?{x:Math.max(-120,Math.min(120,old.x+dx)),y:Math.max(-120,Math.min(120,old.y+dy))}:{x:0,y:0};
+                } else this.visualCorrection={x:0,y:0};
                 if (snap.tServer != null && snap.tServer > this.latestServerTime) {
                     this.latestServerTime = snap.tServer;
                 }
@@ -5158,6 +5183,7 @@
                         for (const pid of snap.readyPlayerIds) {
                             if (!this.countdownReadySet.has(pid)) {
                                 this.countdownReadySet.add(pid);
+                                if(snap.players?.[pid]?.isBot)continue;
                                 const name = (snap.players && snap.players[pid] && snap.players[pid].displayName) || pid;
                                 this.showJoinedNotification(name);
                             }
@@ -5561,6 +5587,7 @@
                             this.spawnParticles(ev.x, ev.y);
                             if (ev.playerId === mySessionId) this.cameras.main.shake(140, 0.006);
                         }
+                        else if (ev.type === 'player_hit') this.spawnParticles(ev.x,ev.y);
                         else if (ev.type === 'hit') {
                             this.spawnParticles(ev.x, ev.y);
                             if (ev.playerId === mySessionId) {
@@ -5579,7 +5606,9 @@
             bakeSvgTexture(key, svg, size, cb) {
                 if (this.textures.exists(key)) { cb(key); return; }
                 const img = new Image();
+                const epoch=this.textureEpoch||0;
                 img.onload = () => {
+                    if(epoch!==(this.textureEpoch||0)){cb(null);return;}
                     if (!this.textures.exists(key)) {
                         const c = document.createElement('canvas');
                         c.width = size; c.height = size;
@@ -5691,6 +5720,8 @@
             }
 
             playCoinFX(x, y) {
+                if(!this.effectVisible(x,y) || (this.coinFxCount||0)>=16)return;
+                this.coinFxCount=(this.coinFxCount||0)+1;
                 const shockWhite = this.add.circle(x, y, 10, 0xffffff, 0).setStrokeStyle(3, 0xffffff).setDepth(50);
                 const shockBlack = this.add.circle(x, y, 10, 0x000000, 0).setStrokeStyle(3, 0x000000).setDepth(50);
                 this.tweens.add({
@@ -5699,23 +5730,35 @@
                 });
                 this.tweens.add({
                     targets: shockBlack, radius: 140, alpha: { from: 1, to: 0 },
-                    delay: 50, duration: 500, ease: 'Quad.easeOut', onComplete: () => shockBlack.destroy()
+                    delay: 50, duration: 500, ease: 'Quad.easeOut', onComplete: () => {shockBlack.destroy();this.coinFxCount--;}
                 });
             }
 
+            effectVisible(x,y) {return x>-100 && x<CANVAS_WIDTH+100 && y>this.cameras.main.scrollY-100 && y<this.cameras.main.scrollY+CANVAS_HEIGHT+100;}
             spawnParticles(x, y) {
-                for (let i = 0; i < 10; i++) {
-                    const p = this.add.image(x, y, 'particle').setDepth(20);
-                    const vx = (Math.random() - 0.5) * 600;
-                    const vy = -Math.random() * 400 - 200;
-                    this.tweens.add({
-                        targets: p,
-                        x: p.x + vx * 0.6,
-                        y: p.y + vy * 0.6 + 144,
-                        alpha: 0, scale: 0.1, angle: Math.random() * 360,
-                        duration: 600, ease: 'Cubic.easeIn',
-                        onComplete: () => p.destroy()
-                    });
+                if(!this.effectVisible(x,y))return;
+                if(!this.particlePool)this.particlePool=[];
+                for(let i=0;i<10;i++) {
+                    let p=this.particlePool.find(p=>p.life<=0);
+                    if(!p) {
+                        if(this.particlePool.length>=128)return;
+                        p={sprite:this.add.image(x,y,'particle').setDepth(20),life:0};this.particlePool.push(p);
+                    }
+                    p.life=600;p.vx=(Math.random()-.5)*600;p.vy=-Math.random()*400-200;
+                    p.sprite.setPosition(x,y).setVisible(true).setAlpha(1).setScale(1);
+                }
+            }
+            updateParticles(delta) {
+                const dt=Math.min(delta,50)/1000;
+                for(const p of this.particlePool||[]) {
+                    if(p.life<=0)continue;
+                    p.life-=delta;
+                    if(p.life<=0){p.sprite.setVisible(false);continue;}
+                    p.vy+=800*dt;p.sprite.x+=p.vx*dt;p.sprite.y+=p.vy*dt;
+                    p.sprite.setAlpha(p.life/600).setScale(.1+.9*p.life/600);
+                }
+                for(const coin of this.coinSprites.values()) {
+                    if(this.effectVisible(coin.x,coin.y))coin.angle+=delta*.3;
                 }
             }
 
@@ -5750,11 +5793,11 @@
                     }
                 ).setOrigin(0.5).setScrollFactor(0).setDepth(201);
 
-                const maxLines = 8;
+                const maxLines = SIM.MAX_ROUND_PLAYERS;
                 for (let i = 0; i < maxLines; i++) {
-                    const lineY = 320 + i * 44;
-                    const t = this.add.text(CANVAS_WIDTH / 2, lineY, '', {
-                        fontFamily: 'Arial', fontSize: '28px', fontStyle: 'bold',
+                    const lineY = 320 + (i % 8) * 44;
+                    const t = this.add.text(i < 8 ? 180 : 540, lineY, '', {
+                        fontFamily: 'Arial', fontSize: '20px', fontStyle: 'bold',
                         color: '#ffffff', stroke: '#000000', strokeThickness: 4,
                     }).setOrigin(0.5).setScrollFactor(0).setDepth(201).setVisible(false);
                     objs.scoreLines.push(t);
@@ -5847,7 +5890,7 @@
                         const rank = (i + 1) + '.';
                         const isMe = entry.id === mySessionId;
                         const name = entry.displayName || entry.id;
-                        const label = `${rank} ${name}${isMe ? ' (you)' : ''}  -  ${entry.score}`;
+                        const label = `${rank} ${name.length>14?name.slice(0,13)+'…':name}${isMe ? ' (you)' : ''}  -  ${entry.score}`;
                         lines[i].setText(label);
                     } else {
                         lines[i].setText('');
@@ -5898,76 +5941,25 @@
                 this.gameOverOverlayShown = false;
             }
 
-            applyFlapToMyState() {
-                if (!this.myState || !this.myState.alive) return false;
-                if (this.roundState !== ROUND_RUNNING) return false;
-                if (this.myServerTarget && this.myServerTarget.stunned) return false;
-                const now = performance.now();
-                if (now - this.myState.lastFlapTime < SIM.FLAP_COOLDOWN_MS) return false;
-
-                if (!musicStarted) startMusic();
-
-                this.myState.vy = -SIM.JUMP_FORCE;
-                this.myState.vx = SIM.HORIZONTAL_SPEED * this.myState.nextFlapDirection;
-                this.myState.nextFlapDirection = (this.myState.nextFlapDirection === 1) ? -1 : 1;
-                this.myState.lastFlapTime = now;
-                clampVelocity(this.myState);
-                return true;
-            }
-
-            stepMyState(deltaSeconds) {
-                if (!this.myState || !this.myState.alive) return;
-                if (this.myServerTarget && !this.myServerTarget.hasStarted) return;
-                if (this.roundState !== ROUND_RUNNING) return;
-                if (this.isSpectating) return;
-
-                const s = this.myState;
-                s.vy += SIM.GRAVITY * deltaSeconds;
-                if (s.vy > SIM.MAX_FALL_SPEED) s.vy = SIM.MAX_FALL_SPEED;
-                s.x += s.vx * deltaSeconds;
-                s.y += s.vy * deltaSeconds;
-
-                const minX = SIM.WALL_THICKNESS + SIM.PLAYER_RADIUS;
-                const maxX = CANVAS_WIDTH - SIM.WALL_THICKNESS - SIM.PLAYER_RADIUS;
-                if (s.x < minX) {
-                    s.x = minX;
-                    if (s.vx < 0) s.vx = -s.vx * (1 + SIM.PLAYER_BOUNCE * 0.5);
-                }
-                if (s.x > maxX) {
-                    s.x = maxX;
-                    if (s.vx > 0) s.vx = -s.vx * (1 + SIM.PLAYER_BOUNCE * 0.5);
-                }
-                clampVelocity(s);
-            }
-
-            reconcileMyState() {
-                if (!this.myState || !this.myServerTarget) return;
-                if (!this.myState.alive) return;
-                const t = this.myServerTarget;
-                // The flap oscillation is purely horizontal, so that is the
-                // only axis where the server's lag is systematically mistaken
-                // for error. Vertical is left fully corrected: it is monotonic
-                // while climbing, and it is the axis that blocks and spikes are
-                // judged on, so keeping it tight keeps collisions honest.
-                const dx = t.x - this.myState.x;
-                const adx = Math.abs(dx);
-                if (adx > RECONCILE_DEADBAND_X) {
-                    this.myState.x += Math.sign(dx) * (adx - RECONCILE_DEADBAND_X) * RECONCILE_LERP;
-                }
-                this.myState.y += (t.y - this.myState.y) * RECONCILE_LERP;
-                const now = performance.now();
-                const sinceLastFlap = now - this.myState.lastFlapTime;
-                if (sinceLastFlap > POST_FLAP_VEL_GRACE_MS) {
-                    this.myState.vx += (t.vx - this.myState.vx) * RECONCILE_VEL_LERP;
-                    this.myState.vy += (t.vy - this.myState.vy) * RECONCILE_VEL_LERP;
+            syncPrediction(delta) {
+                const previous=this.myState;
+                const before=previous && previous.lastFlapTime;
+                predictor.advance();
+                const state=predictor.player(mySessionId);
+                if(!state)return;
+                this.myState=state;
+                if(before!=null && state.lastFlapTime>before && state.alive) {
+                    const v=this.playerVisuals.get(mySessionId);if(v)this.playFlapJuice(v);
                 }
             }
 
             updateRemotePlayerVisuals() {
-                const renderTime = this.latestServerTime - INTERP_DELAY_MS;
+                const renderTime = this.latestServerTime + Math.min(150, performance.now()-this.latestSnapshotAt) - INTERP_DELAY_MS;
                 for (const [id, v] of this.playerVisuals) {
                     if (id === mySessionId) continue;
-                    const sample = this.sampleInterpState(id, renderTime);
+                    const predicted=predictor.player(id);
+                    const nearby=predicted && this.myState && Math.abs(predicted.y-this.myState.y)<CANVAS_HEIGHT;
+                    const sample = nearby ? {...predicted, alive:(this.latestPlayerData.get(id)||{}).alive} : this.sampleInterpState(id, renderTime);
                     if (!sample) continue;
                     v.sprite.x = sample.x;
                     v.sprite.y = sample.y;
@@ -6101,33 +6093,27 @@
                     this.cameras.main.scrollY += (targetScrollY - this.cameras.main.scrollY) * 0.05;
                 }
 
-                if (!this.gameOverOverlayShown && this.roundState === ROUND_RUNNING && !this.isSpectating) {
-                    const pointer = this.input.activePointer;
-                    const pointerOnCanvas = pointer.isDown &&
-                        (!pointer.event || pointer.event.target === this.sys.game.canvas);
-                    const isHeld = pointerOnCanvas || (this.spaceKey && this.spaceKey.isDown);
-                    if (isHeld) {
-                        const localFlap = this.applyFlapToMyState();
-                        if (localFlap) {
-                            const myV = this.playerVisuals.get(mySessionId);
-                            if (myV) this.playFlapJuice(myV);
-                        }
-                        sendFlap();
-                    }
-                }
-
-                this.stepMyState(dt);
-                this.reconcileMyState();
+                const pointer = this.input.activePointer;
+                const pointerOnCanvas = pointer.isDown && (!pointer.event || pointer.event.target === this.sys.game.canvas);
+                const held = !document.hidden && document.hasFocus() && !this.gameOverOverlayShown &&
+                    this.roundState === ROUND_RUNNING && !this.isSpectating &&
+                    (pointerOnCanvas || (this.spaceKey && this.spaceKey.isDown));
+                predictor.advance();
+                predictor.input(!!held);
+                this.syncPrediction(delta);
+                if(this.visualCorrection){const decay=Math.exp(-delta/50);this.visualCorrection.x*=decay;this.visualCorrection.y*=decay;}
+                this.updateWallPool();
+                this.updateParticles(delta);
 
                 if (this.myState) {
                     const myV = this.playerVisuals.get(mySessionId);
                     if (myV) {
-                        myV.sprite.x = this.myState.x;
-                        myV.sprite.y = this.myState.y;
-                        myV.eyesContainer.x = this.myState.x;
-                        myV.eyesContainer.y = this.myState.y;
-                        myV.nameText.x = this.myState.x;
-                        myV.nameText.y = this.myState.y - 60;
+                        myV.sprite.x = this.myState.x + (this.visualCorrection?.x || 0);
+                        myV.sprite.y = this.myState.y + (this.visualCorrection?.y || 0);
+                        myV.eyesContainer.x = this.myState.x + (this.visualCorrection?.x || 0);
+                        myV.eyesContainer.y = this.myState.y + (this.visualCorrection?.y || 0);
+                        myV.nameText.x = this.myState.x + (this.visualCorrection?.x || 0);
+                        myV.nameText.y = this.myState.y - 60 + (this.visualCorrection?.y || 0);
 
                         myV.targetEye.x = Phaser.Math.Clamp(this.myState.vx / 20, -6, 6);
                         myV.targetEye.y = Phaser.Math.Clamp(this.myState.vy / 40, -4, 4);
@@ -6142,10 +6128,11 @@
                 this.updatePowerupVisuals(time);
 
                 for (const refs of this.hexagonPairSprites.values()) {
-                    this.drawBeamDashes(refs, time);
+                    if(this.effectVisible(CANVAS_WIDTH/2,refs.y))this.drawBeamDashes(refs, time);
                 }
 
                 for (const v of this.playerVisuals.values()) {
+                    if(!this.effectVisible(v.sprite.x,v.sprite.y))continue;
                     v.currentEye.x += (v.targetEye.x - v.currentEye.x) * 0.15;
                     v.currentEye.y += (v.targetEye.y - v.currentEye.y) * 0.15;
                     v.currentPupil.x += (v.targetPupil.x - v.currentPupil.x) * 0.15;
