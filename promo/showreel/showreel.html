@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AGICENDS Showreel</title>
+<style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+    body { display: flex; align-items: center; justify-content: center; }
+    canvas { width: 100vw; height: 56.25vw; max-height: 100vh; max-width: 177.78vh; display: block; }
+    #bar { position: fixed; left: 0; right: 0; bottom: 0; height: 3px; background: #333; }
+    #bar i { display: block; height: 100%; width: 0; background: #fff; }
+    #hint { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); color: #777; font: 12px monospace; }
+    body.render #bar, body.render #hint { display: none; }
+</style>
+</head>
+<body>
+<canvas id="out" width="1920" height="1080"></canvas>
+<div id="bar"><i></i></div>
+<div id="hint">click / space: play · ← →: step · 0–6: jump to shot</div>
+<script src="../../client/character.js"></script>
+<script src="reel/core.js"></script>
+<script src="reel/scenes.js"></script>
+<script>
+(function () {
+    'use strict';
+    const R = window.Reel, S = window.ReelScenes;
+    const params = new URLSearchParams(location.search);
+    const RENDER = params.has('render');
+    if (RENDER) document.body.classList.add('render');
+
+    const FPS = 60, DUR = S.DUR, FRAMES = Math.round(DUR * FPS);
+    const out = document.getElementById('out');
+    const octx = out.getContext('2d');
+    const scene = document.createElement('canvas'); scene.width = R.W; scene.height = R.H;
+    const sctx = scene.getContext('2d');
+
+    // hard cuts: motion-blur sub-frames never straddle one
+    const CUTS = [0, 4.0, 6.0, 8.0, 10.0, 12.0, DUR];
+    const shotRange = (t) => { for (let i = 0; i < CUTS.length - 1; i++) if (t < CUTS[i + 1]) return [CUTS[i], CUTS[i + 1]]; return [CUTS[CUTS.length - 2], DUR]; };
+    // extra samples where the camera really moves
+    const FAST = [[0.98, 1.7], [1.98, 2.2], [3.55, 4.05], [7.78, 8.02], [8.48, 8.7], [9.68, 10.45], [11.45, 12.45], [14.4, 14.95]];
+    const samplesAt = (t, base) => (FAST.some(([a, b]) => t >= a && t <= b) ? base * 2 : base);
+
+    function renderFrame(i, opts = {}) {
+        const base = opts.samples || 6;
+        const shutter = opts.shutter == null ? 0.5 : opts.shutter;   // 180°
+        const ft = i / FPS;
+        const n = samplesAt(ft, base);
+        const [lo, hi] = shotRange(ft);
+        octx.save();
+        octx.globalCompositeOperation = 'source-over';
+        for (let s = 0; s < n; s++) {
+            let t = ft + ((s + 0.5) / n - 0.5) * (shutter / FPS);
+            t = Math.min(Math.max(t, lo), hi - 1e-5);
+            sctx.setTransform(1, 0, 0, 1, 0, 0);
+            sctx.globalAlpha = 1; sctx.globalCompositeOperation = 'source-over';
+            S.drawScene(sctx, t, ft);
+            octx.globalAlpha = 1 / (s + 1);
+            octx.drawImage(scene, 0, 0);
+        }
+        octx.restore();
+        octx.save();
+        S.drawHUD(octx, ft);
+        octx.restore();
+    }
+
+    window.REEL = { FPS, DUR, FRAMES, renderFrame, cues: null };
+    window.renderFrameData = (i, samples) => { renderFrame(i, { samples }); return out.toDataURL('image/png'); };
+
+    window.ready = (async () => {
+        await R.loadFonts('');
+        window.REEL.cues = S.build(sctx);
+        renderFrame(0, { samples: 1 });
+        return true;
+    })();
+
+    if (RENDER) return;
+
+    // ── preview player ────────────────────────────────────────────────────
+    let playing = false, t0 = 0, pos = 0;
+    const audio = new Audio('out/agicends-showreel.mp4');   // the built reel's own audio track
+    audio.preload = 'auto';
+    const bar = document.querySelector('#bar i');
+    function draw(t) {
+        renderFrame(Math.min(FRAMES - 1, Math.floor(t * FPS)), { samples: 1 });
+        bar.style.width = (100 * t / DUR) + '%';
+    }
+    function loop() {
+        if (!playing) return;
+        pos = (performance.now() - t0) / 1000;
+        if (pos >= DUR) { pos = 0; t0 = performance.now(); try { audio.currentTime = 0; audio.play(); } catch (e) {} }
+        draw(pos);
+        requestAnimationFrame(loop);
+    }
+    function toggle() {
+        playing = !playing;
+        if (playing) { t0 = performance.now() - pos * 1000; audio.currentTime = pos; audio.play().catch(() => {}); loop(); }
+        else audio.pause();
+    }
+    window.ready.then(() => draw(0));
+    addEventListener('click', toggle);
+    addEventListener('keydown', (e) => {
+        if (e.code === 'Space') { e.preventDefault(); toggle(); }
+        else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+            if (playing) toggle();
+            pos = Math.max(0, Math.min(DUR - 1 / FPS, pos + (e.key === 'ArrowRight' ? 1 : -1) / FPS * (e.shiftKey ? 15 : 1)));
+            draw(pos);
+        } else if (/^[0-6]$/.test(e.key)) {
+            if (playing) toggle();
+            pos = [0, 2, 4, 6, 8, 10, 12][+e.key]; draw(pos);
+        }
+    });
+})();
+</script>
+</body>
+</html>
